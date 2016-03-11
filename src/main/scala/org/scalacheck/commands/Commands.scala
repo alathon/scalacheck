@@ -20,80 +20,50 @@ import scala.language.implicitConversions
  *  @since 1.12.0
  */
 trait Commands {
-  
-/**
-    *  The [[Term]] type models a (per test) unique binding, and a possible
-    *  value. Symbolic terms are meant for use during test generation, and
-    *  dynamic terms are for runtime. ScalaCheck automatically encapsulates the
-    *  results of a command into SymbolicTerm's during test generation, and DynamicTerm's
-    *  during runtime.
-    */
-  sealed abstract class Term[+A](val binding: Binding) {
-    def get: Try[A]
-    def isEmpty: Boolean
-    def isDefined: Boolean = !isEmpty
-    final def nonEmpty = isDefined
-    final def getOrElse[B >: A](default: => B): B = if (isEmpty || get.isFailure) default else this.get.get
-    final def orNull[A1 >: A](implicit ev: Null <:< A1): A1 = this getOrElse ev(null)
-    
-    // Returns result of applying $f to this $term's value if
-    // the term is non-empty and has a Success value. Otherwise,
-    // evaluates ifEmpty.
-    final def fold[B](ifEmpty: => B)(f: A => B): B = if(isEmpty) ifEmpty else f(get.get)
-    
+  sealed case class Binding(val bind: Int)
+
+  sealed class Term[A](val binding: Binding, private val value: Option[Try[A]]) {
+    final override def toString = "Term(" + binding + "," + value + ")"
     final def map[B](f: A => B): Option[B] = {
-      if(isEmpty) None else Some(f(get.get))
+      if(value.isEmpty) None else value.get match {
+        case Failure(e) => None
+        case Success(v) => Some(f(v))
+      }
     }
     
     final def flatMap[B](f: A => Option[B]): Option[B] = {
-      if(isEmpty) None else f(get.get)
+      if(value.isEmpty) None else value.get match {
+        case Failure(e) => None
+        case Success(v) => f(v)
+      }
     }
     
-    // Will return Some(value), if there is a Success value and p is true. Otherwise None
-    final def filter(p: A => Boolean): Option[A] =
-      if(isEmpty) None else if(p(get.get)) Some(get.get) else None
-    
-    // Filters based on the binding, not the value.
-    final def filterBinding(p: Binding => Boolean): Option[Term[A]] =
-      if(p(this.binding)) Some(this) else None
-    
-    final def contains[A1 >: A](elem: A1): Boolean =
-      !isEmpty && get.get == elem
-    
-    final def exists(p: A => Boolean): Boolean =
-      !isEmpty && p(get.get)
-    
-    final def forall(p: A => Boolean): Boolean = isEmpty || p(get.get)
+    final def isEmpty: Boolean = value.isEmpty || value.get.isFailure
     
     final def foreach[U](f: A => U) {
-        if(!isEmpty) f(get.get)
+      if(!isEmpty) f(value.get.get)
+    }
+    
+    final def filter(p: A => Boolean): Option[A] =
+      if(isEmpty) None else value.get match {
+        case Failure(e) => None
+        case Success(v) => if(p(v)) Some(v) else None
       }
     
-    final def collect[B](pf: PartialFunction[A, B]): Option[B] =
-      if(!isEmpty) pf.lift(this.get.get) else None
-      
-    final def orElse[B >: A](alternative: => B): B =
-      if(isEmpty) alternative else this.get.get
+    final def withFilter(p: A => Boolean): WithFilter = new WithFilter(p)
+    
+    class WithFilter(p: A => Boolean) {
+      def map[B](f: A => B): Option[B] = Term.this filter p map f
+      def flatMap[B](f: A => Option[B]): Option[B] = Term.this filter p flatMap f
+      def foreach[U](f: A => U): Unit = Term.this filter p foreach f
+      def withFilter(q: A => Boolean): WithFilter = new WithFilter(x => p(x) && q(x))
+    }
   }
-  
-   /**
-   * A Binding is a (per SUT) unique identifier, basically a wrapped int with a nicer name. This helps clarify
-   * intent, if you need to keep track of term bindings in your State, e.g. a Map[String, Binding]
-   * has the clear intent of mapping strings to a term binding, while Map[String, Int] is less clear.
-   */
-  case class Binding(val binding: Int)
-  implicit def intToBinding(o: Int) = new Binding(o)
-  
-  case class SymbVar[A](override val binding: Binding) extends Term[A](binding) {
-    override def isEmpty = true
-    override def get = throw new NoSuchElementException("SymbVar.get")
+    
+  private object Term {
+    def apply[A](b: Int) = new Term[A](Binding(b), None)
+    def apply[A](b: Int, a: Try[A]) = new Term[A](Binding(b), Option(a))
   }
-  
-  case class DynVar[A](override val binding: Binding, val value: Try[A]) extends Term[A](binding) {
-    override def isEmpty = get.isFailure
-    override def get = value
-  }
-  
   /** The abstract state type. Must be immutable.
    *  The [[State]] type should model the state of the system under
    *  test (SUT). It should only contain details needed for specifying
@@ -330,7 +300,8 @@ trait Commands {
         import Prop.BooleanOperators
         val r = Try(c.run(sut, s))
         val pf:State => Prop = st => c.preCondition(st) ==> c.postCondition(st,r)
-        val term = DynVar(Binding(count), r)
+        val term = Term[c.Result](count,r)
+        //println(term)
         (p && pf(s), c.nextState(s,term), rs :+ r.map(_.toString), count + 1)
       }
     }
@@ -346,19 +317,16 @@ trait Commands {
 
     def endStates(scss: (State, List[Commands])): List[State] = {
       val (s,css) = (scss._1, scss._2.filter(_.nonEmpty))
-      var count = 0
       (memo.get((s,css)),css) match {
         case (Some(states),_) => states
         case (_,Nil) => List(s)
         case (_,cs::Nil) =>
           List(cs.init.foldLeft(s) { case (s0,c) => {
-            count += 1
-            c.nextState(s0, SymbVar(count)) 
+            c.nextState(s0, Term[c.Result](0))
           }})
         case _ =>
           val inits = scan(css) { case (cs,x) => {
-            count += 1
-            (cs.head.nextState(s, SymbVar(count)), cs.tail::x)
+            (cs.head.nextState(s, Term(0)), cs.tail::x)
           }}
           val states = inits.distinct.flatMap(endStates).distinct
           memo += (s,css) -> states
@@ -418,21 +386,19 @@ trait Commands {
 
     def sizedCmds(s: State)(sz: Int): Gen[(State,Commands)] = {
       val l: List[Unit] = List.fill(sz)(())
-      var count = 0
       l.foldLeft(const((s,Nil:Commands))) { case (g,()) =>
         for {
           (s0,cs) <- g
           c <- genCommand(s0) suchThat (_.preCondition(s0))
         } yield {
-          count += 1
-          (c.nextState(s0, SymbVar(count)), cs :+ c)
+          (c.nextState(s0, Term[c.Result](0)), cs :+ c)
         }
       }
     }
 
     def cmdsPrecond(s: State, cmds: Commands, count: Int): (State,Boolean) = cmds match {
       case Nil => (s,true)
-      case c::cs if c.preCondition(s) => cmdsPrecond(c.nextState(s, SymbVar(count)), cs, count + 1)
+      case c::cs if c.preCondition(s) => cmdsPrecond(c.nextState(s, Term[c.Result](0)), cs, count + 1)
       case _ => (s,false)
     }
 

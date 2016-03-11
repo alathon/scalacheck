@@ -13,7 +13,7 @@ class MultiPidSpawner() {
     pids: Seq[String],
     regs: Map[String, String])
 
-  private val uuids:Seq[String] =  Seq.fill(Random.nextInt(20))(genUUID())
+  private val uuids:Seq[String] =  Seq.fill(Random.nextInt(30))(genUUID())
     
   var state = MultiPidSpawnerState(pids = uuids, regs = Map.empty)
 
@@ -145,9 +145,10 @@ object MultiPidRegistrationSpecification extends Commands {
     override def run(sut: Sut, s: State): Result = {
       {
         for {
-          pids <- s.pids.flatMap(_.map(identity))
-          pid <- pids.lift(pidIdx)
-        } yield sut.register(pid, name)
+          term <- s.pids
+          pids <- term
+          a <- pids.lift(pidIdx)
+        } yield sut.register(a, name) 
       } getOrElse sut.register("Invalid pid", name)
     }
     

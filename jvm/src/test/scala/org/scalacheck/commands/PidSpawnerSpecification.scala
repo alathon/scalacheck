@@ -96,9 +96,11 @@ object PidRegistrationSpecification extends Commands{
 
   def genRegister(state: State): Gen[Command] = {
     if(state.pids.isEmpty) genSpawn else for {
-      SymbVar(binding) <- Gen.oneOf(state.pids.toSeq)
+      term <- oneOf(state.pids.toSeq)
       name <- Gen.identifier
-    } yield Register(binding, name)
+    } yield {
+      Register(term.binding, name)
+    }
   }
 
   def genUnregisterRandom: Gen[Command] = {
@@ -144,16 +146,19 @@ object PidRegistrationSpecification extends Commands{
     }
   }
 
-  case class Register(bind: Binding, name: String) extends Command {
-    def findPid(s: State) = s.pids.find(_.binding == bind)
+  case class Register(b: Binding, name: String) extends Command {
+    def findPid(s: State): Option[Term[String]] = s.pids.find(_.binding == b)
+    
     override type Result = Unit
-    override def preCondition(state: State): Boolean = findPid(state).isDefined
+    
+    override def preCondition(state: State): Boolean = true
+    
     override def nextState(s: State, v:Term[Result]) = {
-      if(s.regs.contains(name)) {
-        s
-      } else {
-        findPid(s) map { case t => s.copy(regs = s.regs ++ Map(name -> t)) } getOrElse(s)
-      }
+      {
+        for {
+          term <- findPid(s) if(!s.regs.contains(name))
+        } yield s.copy(regs = s.regs ++ Map(name -> term))
+      } getOrElse s
     }
 
     override def postCondition(s: State, result: Try[Result]): Prop = {
@@ -163,9 +168,11 @@ object PidRegistrationSpecification extends Commands{
     
     override def run(sut: Sut, s: State): Result = {
       for {
-        term <- s.pids.find(_.binding == bind)
+        term <- findPid(s)
         pid <- term
-      } yield sut.register(pid, name)
+      } yield {
+        sut.register(pid, name)
+      }
     }
   }
 
