@@ -18,3 +18,13 @@ target
 
 /examples/simple-sbt/project/
 /examples/simple-sbt/target/
+
+# Ecipse things
+.project
+.settings
+.classpath
+.cache-main
+.cache-tests
+
+# Bin
+jvm/bin
