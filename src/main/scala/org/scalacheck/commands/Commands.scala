@@ -21,8 +21,16 @@ import scala.language.implicitConversions
  */
 trait Commands {
   sealed case class Binding(val bind: Int)
-
+  implicit def intToBinding(o: Int) = new Binding(o)
+  
   sealed class Term[A](val binding: Binding, private val value: Option[Try[A]]) {
+    def apply(): Option[A] = {
+      if(value.isEmpty) None else value.get match {
+        case Failure(e) => None
+        case Success(v) => Some(v)
+      }
+    }
+    
     final override def toString = "Term(" + binding + "," + value + ")"
     final def map[B](f: A => B): Option[B] = {
       if(value.isEmpty) None else value.get match {
@@ -44,6 +52,12 @@ trait Commands {
       if(!isEmpty) f(value.get.get)
     }
     
+    final def exists(p: A => Boolean): Boolean =
+      if(isEmpty) false else value.get match {
+        case Failure(e) => false
+        case Success(v) => p(v)
+      }
+      
     final def filter(p: A => Boolean): Option[A] =
       if(isEmpty) None else value.get match {
         case Failure(e) => None
@@ -59,11 +73,12 @@ trait Commands {
       def withFilter(q: A => Boolean): WithFilter = new WithFilter(x => p(x) && q(x))
     }
   }
-    
+
   private object Term {
-    def apply[A](b: Int) = new Term[A](Binding(b), None)
-    def apply[A](b: Int, a: Try[A]) = new Term[A](Binding(b), Option(a))
+    def apply[A](b: Int) = new Term[A](b, None)
+    def apply[A](b: Int, a: Try[A]) = new Term[A](b, Option(a))
   }
+
   /** The abstract state type. Must be immutable.
    *  The [[State]] type should model the state of the system under
    *  test (SUT). It should only contain details needed for specifying

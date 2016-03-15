@@ -7,13 +7,14 @@ import org.scalacheck.Gen._
 import scala.util.{Success, Failure, Try}
 import java.io.PrintWriter
 import java.io.File
+import scala.language.postfixOps
 
 class MultiPidSpawner() {
   case class MultiPidSpawnerState(
     pids: Seq[String],
     regs: Map[String, String])
 
-  private val uuids:Seq[String] =  Seq.fill(Random.nextInt(30))(genUUID())
+  private val uuids:Seq[String] =  Seq.fill(30)(genUUID())
     
   var state = MultiPidSpawnerState(pids = uuids, regs = Map.empty)
 
@@ -51,12 +52,12 @@ object CommandsMultiPidRegistration extends Properties("CommandsMultiPidRegistra
 }
 
 object MultiPidRegistrationSpecification extends Commands {
-
+  
   type Sut = MultiPidSpawner
 
   case class State(
     pids: Option[Term[Seq[String]]],
-    regs: Map[String, Int])
+    regs: Map[String, Term[String]])
 
   override def genInitialState: Gen[State] = State(pids = None, regs = Map.empty)
 
@@ -78,7 +79,7 @@ object MultiPidRegistrationSpecification extends Commands {
   def genCommand(state: State): Gen[Command] = {
     frequency(
       (50, genListPids),
-      (20, genRegisterIdx(state)),
+      (20, genRegister(state)),
       (20, genUnregister(state)),
       (5, genWhereIsRandom),
       (20, genWhereIs(state)),
@@ -89,11 +90,10 @@ object MultiPidRegistrationSpecification extends Commands {
 
   def genListPids: Gen[ListPids] = ListPids()
   
-  def genRegisterIdx(state: State) = {
+  def genRegister(state: State) = {
     if(state.pids.isEmpty) genListPids else for {
-      idx <- Gen.chooseNum(0,20)
       name <- Gen.identifier
-    } yield RegisterIdx(idx, name)
+    } yield Register(name)
   }
 
   def genUnregisterRandom = {
@@ -120,6 +120,10 @@ object MultiPidRegistrationSpecification extends Commands {
     } yield WhereIs(id)
   }
   
+  def getPid(idx: Int, state: State) = for {
+    pids <- state.pids.flatMap(_.map(identity))
+  } yield pids.lift(idx)
+  
   case class ListPids() extends Command {
     override type Result = Seq[String]
 
@@ -138,44 +142,59 @@ object MultiPidRegistrationSpecification extends Commands {
     }
   }
   
-  case class RegisterIdx(pidIdx: Int, name: String) extends Command {
-    def regTaken(s: State) = s.regs.exists(r => r._1 == name || r._2 == pidIdx)
-    override type Result = Unit
+  
+  case class Register(name: String) extends Command {
+    override type Result = String
+    
     override def preCondition(state: State) = state.pids.isDefined
+    
     override def run(sut: Sut, s: State): Result = {
       {
         for {
-          term <- s.pids
-          pids <- term
-          a <- pids.lift(pidIdx)
-        } yield sut.register(a, name) 
-      } getOrElse sut.register("Invalid pid", name)
-    }
-    
-    // Success is expected if: There are pids, the registration isn't taken and the index is valid.
-    override def postCondition(s: State, result: Try[Result]): Prop = {
-     val ok = for {
-          term <- s.pids
-          pids <- term
+          pids <- s.pids.flatMap(_.map(identity))
+          idx = getIdx(pids)
+          pid = pids(idx)
         } yield {
-          if(regTaken(s) || !pids.isDefinedAt(pidIdx)) {
-            result.isFailure
-          } else {
-            result.isSuccess
-          }
+          sut.register(pid, name)
+          pid
         }
-      ok match {
-        case Some(v) => v
-        case None => false
+      } getOrElse {
+        throw new Exception("preCondition probably violated.")
       }
+    }
+
+    override def postCondition(s: State, result: Try[Result]): Prop = {
+      if(regTaken(s)) result.isFailure
+      else result.isSuccess
     }
     
     override def nextState(s: State, v:Term[Result]) = {
       if(regTaken(s)) {
         s
       } else {
-        s.copy(regs = s.regs ++ Map(name -> pidIdx))
+        s.copy(regs = s.regs ++ Map(name -> v))
       }
+    }
+    
+    var pidIdx:Option[Int] = None
+    
+    def getIdx(pids: Seq[_]): Int = {
+      pidIdx getOrElse {
+        val idx = scala.util.Random.nextInt(pids.size)
+        pidIdx = Some(idx)
+        idx
+      }
+    }
+    
+    def regTaken(s: State): Boolean = {
+      val maybePid = pidIdx flatMap { getPid(_, s) } flatten
+      
+      val entries = for {
+        (n, t) <- s.regs
+        pid <- maybePid
+      } yield (name == n || t.exists(_ == pid))
+      
+      entries.exists(_ == true)
     }
   }
 
@@ -190,13 +209,13 @@ object MultiPidRegistrationSpecification extends Commands {
       result match {
         case Failure(e) => Prop.exception(e)
         
-        case Success(uuid1) => {
-          val uuid2 = s.regs.find(_._1 == name) flatMap { case (_, idx) =>
-            for {
-              pids <- s.pids.flatMap(_.map(identity))
-            } yield pids.lift(idx)
-          }
-          uuid1 == uuid2.flatten
+        case Success(pid1) => {
+          val pid2 = for {
+            (_, term) <- s.regs.find(_._1 == name)
+            value <- term
+          } yield value
+
+          pid1 == pid2
         }
       }
     }
@@ -217,15 +236,13 @@ object MultiPidRegistrationSpecification extends Commands {
     }
 
     override def postCondition(s: State, result: Try[Result]): Prop = {
-      var ok = s.regs.find(_._1 == name) map { case (_, idx) =>
-        val pids = s.pids.flatMap(_.map(identity)) getOrElse(Seq())
-        pids.lift(idx) map ( _ => result.isSuccess ) getOrElse result.isFailure
-      }
-      ok match {
-        case Some(v) => v
-        case None => result.isFailure
-      }
+      val pid = for {
+        (_, term) <- s.regs.find(_._1 == name)
+        value <- term
+      } yield value
       
+      if(pid.isEmpty) result.isFailure
+      else result.isSuccess
     }
 
     override def run(sut: Sut, s: State): Result = {
