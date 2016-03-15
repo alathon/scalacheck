@@ -11,6 +11,7 @@ package org.scalacheck.commands
 
 import org.scalacheck._
 import scala.util.{Try, Success, Failure}
+import scala.language.implicitConversions
 
 /** An API for stateful testing in ScalaCheck.
  *
@@ -19,6 +20,51 @@ import scala.util.{Try, Success, Failure}
  *  @since 1.12.0
  */
 trait Commands {
+  abstract sealed class Term[+A](val source: Command) extends Product with Serializable { self =>
+    val binding = new AnyRef()
+    override def equals(o: Any) = o.isInstanceOf[Term[A]] && 
+      o.asInstanceOf[Term[A]].binding == this.binding
+      
+   def isEmpty: Boolean
+   def get: A
+   def asTry: Try[A]
+   
+   final def flatMap[B](f: A => Term[B]): Term[B] =
+     if(isEmpty) SymbolicTerm(source) else f(this.get)
+   
+   final def map[B](f: A => B): Term[B] = if(isEmpty) SymbolicTerm(source) else DynamicTerm(source, Try(f(this.get)))
+   
+   final def foreach[U](f: A => U) {
+     if (!isEmpty) f(this.get)
+   }
+     
+   def flatten[B](implicit ev: A <:< Term[B]): Term[B] =
+     if(isEmpty) SymbolicTerm(source) else ev(this.get)
+   
+   final def filter(p: A => Boolean): Option[Term[A]] =
+     if(isEmpty || !p(this.get)) None else Some(this)
+     
+   final def withFilter(p: A => Boolean): WithFilter = new WithFilter(p)
+    
+    class WithFilter(p: A => Boolean) {
+      def map[B](f: A => B): Option[Term[B]] = self filter p map(_.map(f)) // self filter p map f
+      def flatMap[B](f: A => Term[B]): Option[Term[B]] = self filter p map(_.flatMap(f)) //f(self.filter(p).get.get) //self filter p flatMap f
+      def foreach[U](f: A => U): Unit = self filter p foreach(_.foreach(f)) // self.filter(p).foreach(t => t.foreach(f))//self filter p foreach f
+      def withFilter(q: A => Boolean): WithFilter = new WithFilter(x => p(x) && q(x))
+    }
+  }
+  
+  sealed case class SymbolicTerm[+A](c: Command) extends Term[Nothing](c) {
+    override def get = throw new Exception("Symbolic terms have no value.")
+    override def asTry = throw new Exception("Symbolic terms have no value.")
+    override def isEmpty = true
+  }
+  
+  sealed case class DynamicTerm[+A](c: Command, res: Try[A]) extends Term[A](c) {
+    override def get = res.get
+    override def asTry = res
+    override def isEmpty = false
+  }
 
   /** The abstract state type. Must be immutable.
    *  The [[State]] type should model the state of the system under
@@ -108,12 +154,12 @@ trait Commands {
      *  is later used for verifying that the command behaved according
      *  to the specification, by the [[Command!.postCondition* postCondition]]
      *  method. */
-    def run(sut: Sut): Result
+    def run(sut: Sut, state: State): Result
 
     /** Returns a new [[State]] instance that represents the
      *  state of the system after this command has run, given the system
      *  was in the provided state before the run. */
-    def nextState(state: State): State
+    def nextState(state: State, t: Term[Result]): State
 
     /** Precondition that decides if this command is allowed to run
      *  when the system under test is in the provided state. */
@@ -126,10 +172,11 @@ trait Commands {
 
     /** Wraps the run and postCondition methods in order not to leak the
      *  dependant Result type. */
-    private[Commands] def runPC(sut: Sut): (Try[String], State => Prop) = {
+    private[Commands] def runPC(sut: Sut, state: State): (Term[Result], Try[String], State => Prop) = {
       import Prop.BooleanOperators
-      val r = Try(run(sut))
-      (r.map(_.toString), s => preCondition(s) ==> postCondition(s,r))
+      val r = Try(run(sut, state))
+      val t = DynamicTerm(this, r)
+      (t, r.map(_.toString), s => preCondition(s) ==> postCondition(s,r))
     }
   }
 
@@ -154,41 +201,10 @@ trait Commands {
   /** A command that doesn't do anything */
   case object NoOp extends Command {
     type Result = Null
-    def run(sut: Sut) = null
-    def nextState(state: State) = state
+    def run(sut: Sut, state: State) = null
+    def nextState(state: State, term: Term[Result]) = state
     def preCondition(state: State) = true
     def postCondition(state: State, result: Try[Null]) = true
-  }
-
-  /** A command that runs a sequence of other commands.
-   *  All commands (and their post conditions) are executed even if some
-   *  command fails. Note that you probably can't use this method if you're
-   *  testing in parallel (`threadCount` larger than 1). This is because
-   *  ScalaCheck regards each command as atomic, even if the command
-   *  is a sequence of other commands. */
-  def commandSequence(head: Command, snd: Command, rest: Command*): Command =
-    CommandSequence(head, snd, rest: _*)
-
-  /** A command that runs a sequence of other commands */
-  private final case class CommandSequence(
-    head: Command, snd: Command, rest: Command*
-  ) extends SuccessCommand {
-    /* The tail of the command sequence */
-    val tail: Command =
-      if (rest.isEmpty) snd else CommandSequence(snd, rest.head, rest.tail: _*)
-
-    type Result = (Try[head.Result], Try[tail.Result])
-
-    def run(sut: Sut): Result = (Try(head.run(sut)), Try(tail.run(sut)))
-
-    def nextState(state: State): State = tail.nextState(head.nextState(state))
-
-    def preCondition(state: State): Boolean =
-      head.preCondition(state) && tail.preCondition(head.nextState(state))
-
-    def postCondition(state: State, result: Result): Prop =
-      head.postCondition(state, result._1) &&
-      tail.postCondition(head.nextState(state), result._2)
   }
 
   /** A property that can be used to test this [[Commands]] specification.
@@ -283,8 +299,8 @@ trait Commands {
   private def runSeqCmds(sut: Sut, s0: State, cs: Commands
   ): (Prop, State, List[Try[String]]) =
     cs.foldLeft((Prop.proved,s0,List[Try[String]]())) { case ((p,s,rs),c) =>
-      val (r,pf) = c.runPC(sut)
-      (p && pf(s), c.nextState(s), rs :+ r)
+      val (t,r,pf) = c.runPC(sut, s)
+      (p && pf(s), c.nextState(s, t), rs :+ r)
     }
 
   private def runParCmds(sut: Sut, s: State, pcmds: List[Commands]
@@ -300,10 +316,10 @@ trait Commands {
         case (Some(states),_) => states
         case (_,Nil) => List(s)
         case (_,cs::Nil) =>
-          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0) })
+          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, SymbolicTerm(c)) })
         case _ =>
           val inits = scan(css) { case (cs,x) =>
-            (cs.head.nextState(s), cs.tail::x)
+            (cs.head.nextState(s, SymbolicTerm(cs.head)), cs.tail::x)
           }
           val states = inits.distinct.flatMap(endStates).distinct
           memo += (s,css) -> states
@@ -314,8 +330,8 @@ trait Commands {
     def run(endStates: List[State], cs: Commands
     ): Future[(Prop,List[(Command,Try[String])])] = Future {
       if(cs.isEmpty) (Prop.proved, Nil) else blocking {
-        val rs = cs.init.map(_.runPC(sut)._1)
-        val (r,pf) = cs.last.runPC(sut)
+        val rs = cs.init.map(_.runPC(sut,s)._2)
+        val (t,r,pf) = cs.last.runPC(sut,s)
         (Prop.atLeastOne(endStates.map(pf): _*), cs.zip(rs :+ r))
       }
     }
@@ -367,13 +383,13 @@ trait Commands {
         for {
           (s0,cs) <- g
           c <- genCommand(s0) suchThat (_.preCondition(s0))
-        } yield (c.nextState(s0), cs :+ c)
+        } yield (c.nextState(s0, SymbolicTerm(c)), cs :+ c)
       }
     }
 
     def cmdsPrecond(s: State, cmds: Commands): (State,Boolean) = cmds match {
       case Nil => (s,true)
-      case c::cs if c.preCondition(s) => cmdsPrecond(c.nextState(s), cs)
+      case c::cs if c.preCondition(s) => cmdsPrecond(c.nextState(s, SymbolicTerm(c)), cs)
       case _ => (s,false)
     }
 
