@@ -20,50 +20,110 @@ import scala.language.implicitConversions
  *  @since 1.12.0
  */
 trait Commands {
-  abstract sealed class Term[+A](val source: Command) extends Product with Serializable { self =>
-    val binding = new AnyRef()
-    override def equals(o: Any) = o.isInstanceOf[Term[A]] && 
-      o.asInstanceOf[Term[A]].binding == this.binding
-      
-   def isEmpty: Boolean
-   def get: A
-   def asTry: Try[A]
+  sealed case class TermId(id: Int) {
+    override def toString = id.toString
+  }
+  
+  /*
+   *  Implicit conversion from a Term[T] to an Option[T]. Useful
+   *  in for-notation.
+   */
+  implicit def term2OptionVal[T](xo: Term[T]): Option[T] = xo.toOption
+  
+  abstract sealed class Term[+T] { self =>
+    def termId: TermId
+    override def equals(o: Any) = o.isInstanceOf[Term[T]] && 
+      o.asInstanceOf[Term[T]].termId == this.termId
    
-   final def flatMap[B](f: A => Term[B]): Term[B] =
-     if(isEmpty) SymbolicTerm(source) else f(this.get)
+   def isSymbolic: Boolean
    
-   final def map[B](f: A => B): Term[B] = if(isEmpty) SymbolicTerm(source) else DynamicTerm(source, Try(f(this.get)))
+   def isSuccess: Boolean
    
-   final def foreach[U](f: A => U) {
-     if (!isEmpty) f(this.get)
-   }
-     
-   def flatten[B](implicit ev: A <:< Term[B]): Term[B] =
-     if(isEmpty) SymbolicTerm(source) else ev(this.get)
+   def command: Command
    
-   final def filter(p: A => Boolean): Option[Term[A]] =
-     if(isEmpty || !p(this.get)) None else Some(this)
-     
-   final def withFilter(p: A => Boolean): WithFilter = new WithFilter(p)
+   def get: T
+   
+   def getAsTry: Try[T]
     
-    class WithFilter(p: A => Boolean) {
-      def map[B](f: A => B): Option[Term[B]] = self filter p map(_.map(f)) // self filter p map f
-      def flatMap[B](f: A => Term[B]): Option[Term[B]] = self filter p map(_.flatMap(f)) //f(self.filter(p).get.get) //self filter p flatMap f
-      def foreach[U](f: A => U): Unit = self filter p foreach(_.foreach(f)) // self.filter(p).foreach(t => t.foreach(f))//self filter p foreach f
-      def withFilter(q: A => Boolean): WithFilter = new WithFilter(x => p(x) && q(x))
-    }
+   def getOrElse[U >: T](default: => U): U =
+     if(isSuccess) get else default
+     
+   def toOption: Option[T] = if(isSuccess) Some(get) else None
+   
+   def orElse[U >: T](default: => Term[U]): Term[U] =
+     if(isSuccess) this else default
+   
+   def foreach[U](f: T => U): Unit
+   
+   def flatMap[U](f: T => Term[U]): Term[U]
+    
+   def map[U](f: T => U): Term[U]
+
+   def filter(p: T => Boolean): Term[T]
+   
+   def withFilter(p: T => Boolean): WithFilter = new WithFilter(p)
+    
+    class WithFilter(p: T => Boolean) {
+       def map[U](f: T => U): Term[U] = self filter p map f
+       def flatMap[U](f: T => Term[U]): Term[U] = self filter p flatMap(f)
+       def foreach[U](f: T => U): Unit = self filter p foreach(f)
+       def withFilter(q: T => Boolean): WithFilter = new WithFilter(x => p(x) && q(x))
+     }
+   
   }
   
-  sealed case class SymbolicTerm[+A](c: Command) extends Term[Nothing](c) {
-    override def get = throw new Exception("Symbolic terms have no value.")
-    override def asTry = throw new Exception("Symbolic terms have no value.")
-    override def isEmpty = true
+  final case class SymbolicTerm[+T](val id: TermId, val source: Command) extends Term[T] {
+    override def toString = "Term("+id+")"
+    def termId = id
+    def command = source
+    def get = throw new Exception("Symbolic terms have no value.")
+    def getAsTry = throw new Exception("Symbolic terms have no value.")
+    def isSymbolic: Boolean = true
+    def isSuccess: Boolean = false
+    
+    def flatMap[U](f: T => Term[U]): Term[U] = this.asInstanceOf[Term[U]]
+    def map[U](f: T => U): Term[U] = this.asInstanceOf[Term[U]]
+    def flatten[U](implicit ev: T <:< Term[U]): Term[U] = this.asInstanceOf[Term[U]]
+    def foreach[U](f: T => U): Unit = ()
+    def filter(p: T => Boolean): Term[T] = this
+    
   }
   
-  sealed case class DynamicTerm[+A](c: Command, res: Try[A]) extends Term[A](c) {
-    override def get = res.get
-    override def asTry = res
-    override def isEmpty = false
+  object DynamicTerm {
+    def apply[T](t: Term[T], r: Try[T]) = new DynamicTerm(t.termId, t.command, r)
+  }
+  
+  final case class DynamicTerm[+T](id: TermId, source: Command, res: Try[T]) extends Term[T] {
+    override def toString = "Term("+id+") => " + res
+    def termId = id
+    def command = source
+    def get = res.get
+    def getAsTry = res
+    def isSymbolic: Boolean = false
+    def isSuccess: Boolean = res.isSuccess
+    
+    def flatMap[U](f: T => Term[U]): Term[U] = 
+      if(isSuccess) f(this.get) 
+      else this.asInstanceOf[Term[U]]
+   
+    def map[U](f: T => U): Term[U] =
+      if(isSuccess) {
+        val v2 = f(this.get) // Give f() a chance to throw an exception.
+        DynamicTerm(id, source, Try(v2))
+      } else this.asInstanceOf[Term[U]]
+      
+      //if(isSuccess) DynamicTerm(id, source, Try(f(this.get))) 
+      //else this.asInstanceOf[Term[U]]
+    
+    def foreach[U](f: T => U): Unit = 
+      if(isSuccess) f(this.get)
+      else ()
+      
+    def filter(p: T => Boolean): Term[T] =
+      if(!isSuccess || p(this.get)) this
+      else SymbolicTerm(id, source)
+    
+    def flatten[U](implicit ev: T <:< Term[U]): Term[U] = this.get
   }
 
   /** The abstract state type. Must be immutable.
@@ -172,11 +232,17 @@ trait Commands {
 
     /** Wraps the run and postCondition methods in order not to leak the
      *  dependant Result type. */
-    private[Commands] def runPC(sut: Sut, state: State): (Term[Result], Try[String], State => Prop) = {
+    private[Commands] def runPC(sut: Sut, state: State, termId: TermId): (Term[Result], Try[String], State => Prop) = {
       import Prop.BooleanOperators
       val r = Try(run(sut, state))
-      val t = DynamicTerm(this, r)
+      val t = DynamicTerm(termId, this, r)
       (t, r.map(_.toString), s => preCondition(s) ==> postCondition(s,r))
+    }
+    
+    private[Commands] def runPC(sut: Sut, state: State): (Try[String], State => Prop) = {
+      import Prop.BooleanOperators
+      val r = Try(run(sut, state))
+      (r.map(_.toString), s => preCondition(s) ==> postCondition(s,r))
     }
   }
 
@@ -283,12 +349,16 @@ trait Commands {
   private type Commands = List[Command]
 
   private case class Actions(
-    s: State, seqCmds: Commands, parCmds: List[Commands]
+    s: State, seqCmds: Commands, seqTerms: Seq[Term[_]], parCmds: List[Commands]
   )
 
   private implicit val shrinkActions = Shrink[Actions] { as =>
-    val shrinkedCmds: Stream[Actions] =
-      Shrink.shrink(as.seqCmds).map(cs => as.copy(seqCmds = cs)) append
+    val cmdPairs = as.seqCmds zip as.seqTerms
+    
+    val shrinkedCmds: Stream[Actions] = 
+      Shrink.shrink(cmdPairs).map { case cs => 
+        val (cmds,terms) = cs.unzip
+        as.copy(seqCmds = cmds, seqTerms = terms)} append
       Shrink.shrink(as.parCmds).map(cs => as.copy(parCmds = cs))
 
     Shrink.shrinkWithOrig[State](as.s)(shrinkState) flatMap { state =>
@@ -296,12 +366,13 @@ trait Commands {
     }
   }
 
-  private def runSeqCmds(sut: Sut, s0: State, cs: Commands
-  ): (Prop, State, List[Try[String]]) =
-    cs.foldLeft((Prop.proved,s0,List[Try[String]]())) { case ((p,s,rs),c) =>
-      val (t,r,pf) = c.runPC(sut, s)
-      (p && pf(s), c.nextState(s, t), rs :+ r)
+  private def runSeqCmds(sut: Sut, s0: State, cs: Commands, terms: Seq[Term[_]]
+  ): (Prop, State, List[Try[String]], Seq[Term[_]]) = {
+    cs.foldLeft((Prop.proved,s0,List[Try[String]](),Seq[Term[_]]())) { case ((p,s,rs,ts),c) =>
+      val (t,r,pf) = c.runPC(sut, s, terms(ts.size).termId)
+      (p && pf(s), c.nextState(s, t), rs :+ r, ts :+ t)
     }
+  }
 
   private def runParCmds(sut: Sut, s: State, pcmds: List[Commands]
   ): (Prop, List[List[(Command,Try[String])]]) = {
@@ -316,10 +387,10 @@ trait Commands {
         case (Some(states),_) => states
         case (_,Nil) => List(s)
         case (_,cs::Nil) =>
-          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, SymbolicTerm(c)) })
+          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, SymbolicTerm(TermId(0),c)) })
         case _ =>
           val inits = scan(css) { case (cs,x) =>
-            (cs.head.nextState(s, SymbolicTerm(cs.head)), cs.tail::x)
+            (cs.head.nextState(s, SymbolicTerm(TermId(0), cs.head)), cs.tail::x)
           }
           val states = inits.distinct.flatMap(endStates).distinct
           memo += (s,css) -> states
@@ -330,8 +401,8 @@ trait Commands {
     def run(endStates: List[State], cs: Commands
     ): Future[(Prop,List[(Command,Try[String])])] = Future {
       if(cs.isEmpty) (Prop.proved, Nil) else blocking {
-        val rs = cs.init.map(_.runPC(sut,s)._2)
-        val (t,r,pf) = cs.last.runPC(sut,s)
+        val rs = cs.init.map(_.runPC(sut,s)._1)
+        val (r,pf) = cs.last.runPC(sut,s)
         (Prop.atLeastOne(endStates.map(pf): _*), cs.zip(rs :+ r))
       }
     }
@@ -355,11 +426,20 @@ trait Commands {
     cs.mkString("(","; ",")")
   }
 
+  private def prettyTermsRes(rs: Seq[Term[_]]) = {
+    val ts = rs.map {
+      case DynamicTerm(TermId(id),cmd,res) => s"${id} => ${cmd} = ${res}"
+      case SymbolicTerm(TermId(id),cmd) => s"${id}"
+    }
+    ts.mkString("\n\t")
+  }
   /** A property that runs the given actions in the given SUT */
   private def runActions(sut: Sut, as: Actions, finalize : =>Unit): Prop = {
     try{
-    val (p1, s, rs1) = runSeqCmds(sut, as.s, as.seqCmds)
-    val l1 = s"initialstate = ${as.s}\nseqcmds = ${prettyCmdsRes(as.seqCmds zip rs1)}"
+    val (p1, s, rs1, ts1) = runSeqCmds(sut, as.s, as.seqCmds, as.seqTerms)
+    val l1 =  s"initialstate = ${as.s}\n" +
+              s"seqcmds = ${prettyCmdsRes(as.seqCmds zip rs1)}\n" +
+              s"terms = ${prettyTermsRes(ts1)}\n"
     if(as.parCmds.isEmpty) p1 :| l1
     else propAnd(p1.flatMap{r => if(!r.success) finalize; Prop(prms => r)} :| l1, {
       try{
@@ -377,26 +457,34 @@ trait Commands {
   private def actions(threadCount: Int, maxParComb: Int): Gen[Actions] = {
     import Gen.{const, listOfN, choose, sized}
 
-    def sizedCmds(s: State)(sz: Int): Gen[(State,Commands)] = {
+    def sizedCmds(s: State)(sz: Int): Gen[(State,Commands,Seq[Term[_]])] = {
       val l: List[Unit] = List.fill(sz)(())
-      l.foldLeft(const((s,Nil:Commands))) { case (g,()) =>
+      l.foldLeft(const((s,Nil:Commands,Nil:Seq[Term[_]]))) { case (g,()) =>
         for {
-          (s0,cs) <- g
+          (s0,cs,terms) <- g
           c <- genCommand(s0) suchThat (_.preCondition(s0))
-        } yield (c.nextState(s0, SymbolicTerm(c)), cs :+ c)
+          t = SymbolicTerm(TermId(terms.size),c)
+        } yield (c.nextState(s0, t), cs :+ c,terms :+ t)
       }
     }
 
-    def cmdsPrecond(s: State, cmds: Commands): (State,Boolean) = cmds match {
+    def cmdsPrecondPar(s: State, cmds: Commands): (State,Boolean) = cmds match {
       case Nil => (s,true)
-      case c::cs if c.preCondition(s) => cmdsPrecond(c.nextState(s, SymbolicTerm(c)), cs)
+      case c::cs if c.preCondition(s) => cmdsPrecondPar(c.nextState(s, SymbolicTerm(TermId(0),c)), cs)
       case _ => (s,false)
     }
+    
+    def cmdsPrecondSeq(s: State, cmds: List[(Command,Term[_])]): (State, Boolean) = 
+      cmds match {
+        case Nil => (s, true)
+        case (c,t)::cs if c.preCondition(s) => cmdsPrecondSeq(c.nextState(s, SymbolicTerm(t.termId,t.command)), cs)
+        case _ => (s, false)
+      }
 
     def actionsPrecond(as: Actions) =
       as.parCmds.length != 1 && as.parCmds.forall(_.nonEmpty) &&
-      initialPreCondition(as.s) && (cmdsPrecond(as.s, as.seqCmds) match {
-        case (s,true) => as.parCmds.forall(cmdsPrecond(s,_)._2)
+      initialPreCondition(as.s) && (cmdsPrecondSeq(as.s, as.seqCmds zip as.seqTerms) match {
+        case (s,true) => as.parCmds.forall(cmdsPrecondPar(s,_)._2)
         case _ => false
       })
 
@@ -428,10 +516,10 @@ trait Commands {
 
     val g = for {
       s0 <- genInitialState
-      (s1,seqCmds) <- sized(sizedCmds(s0))
+      (s1,seqCmds,seqTerms) <- sized(sizedCmds(s0))
       parCmds <- if(parSz <= 0) const(Nil) else
                  listOfN(threadCount, sizedCmds(s1)(parSz).map(_._2))
-    } yield Actions(s0, seqCmds, parCmds)
+    } yield Actions(s0, seqCmds, seqTerms, parCmds)
 
     g.suchThat(actionsPrecond)
   }
