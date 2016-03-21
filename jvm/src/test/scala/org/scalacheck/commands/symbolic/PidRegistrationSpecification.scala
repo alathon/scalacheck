@@ -133,30 +133,6 @@ object PidRegistrationSpecification extends Commands{
         term <- findPid(s)      
         pidName <- term
       } yield sut.register(pidName, name)
-      
-      // Variant 1: map + for-notation
-      //findPid(s) map { term =>
-      //  for {
-      //    pidName <- term
-      //  } yield sut.register(pidName, name)
-      //}
-      
-      // Variant 2: Maps Maps Maps
-      //findPid(s) map { term =>
-      //  term map { pid =>
-      //    sut.register(pid, name)
-      //  }
-      //}
-      
-      // Variant 3: Pattern matching. You really shouldn't be doing this!
-      //findPid(s) map { case DynamicTerm(_, _, Success(pid)) =>
-      //  sut.register(pid, name)
-      //}
-      
-      // Variant 4: Methods/if-checks. You REALLY shouldn't be doing this!
-      //findPid(s) map { term =>
-      //  if(term.isSuccess) sut.register(term.get, name)
-      //}
     }
   }
   

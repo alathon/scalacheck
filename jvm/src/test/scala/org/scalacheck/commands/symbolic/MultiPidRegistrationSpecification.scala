@@ -139,6 +139,7 @@ object MultiPidRegistrationSpecification extends Commands {
     // TODO: This is pretty horrible. Also, this
     // doesn't survive past shrinking, since
     // 'idx' is nowhere to be found wrt. State/etc.
+    // Also-also: This is an uncontrolled, bad way to do side-effects!
     def getIdx(state: State): Option[Int] = {
       idx orElse {
         for {

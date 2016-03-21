@@ -18,3 +18,12 @@ target
 
 /examples/simple-sbt/project/
 /examples/simple-sbt/target/
+
+# Eclipse
+.project
+.classpath
+.worksheet
+.settings
+.cache-main
+.cache-tests
+bin/
