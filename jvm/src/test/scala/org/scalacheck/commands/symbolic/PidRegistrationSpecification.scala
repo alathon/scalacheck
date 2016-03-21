@@ -1,51 +1,13 @@
-package org.scalacheck.commands
+package org.scalacheck.commands.symbolic
 
 import org.scalacheck._
 import org.scalacheck.commands._
 import org.scalacheck.Gen._
 import scala.util.{Success, Failure, Try}
-import java.nio.file.{Paths, Files}
-import java.nio.charset.StandardCharsets
-import java.io.PrintWriter
-import java.io.File
 import org.scalacheck.Properties
 import scala.util.Failure
-
-class PidSpawner() {
-  case class PidSpawnerState(
-    pids: Set[String],
-    regs: Map[String, String])
-
-  var state = PidSpawnerState(pids = Set.empty, regs = Map.empty)
-
-  def genUUID() = java.util.UUID.randomUUID.toString
-
-  def spawn():String = {
-    val uuid = genUUID()
-    state = state.copy(pids = state.pids + uuid)
-    uuid
-  }
-
-  def register(uuid: String, name: String): Unit = {
-    if(state.pids.exists(x => x == uuid) && !state.regs.exists(x => x._1 == name)) {
-      state = state.copy(regs = state.regs ++ Map(name -> uuid))
-    } else {
-      throw new Exception(s"Unable to register ${name} -> ${uuid}.")
-    }
-  }
-
-  def unregister(name: String): Unit = {
-    if(state.regs.contains(name)) {
-      state = state.copy(regs = state.regs - name)
-    } else {
-      throw new Exception(s"Unable to unregister ${name}")
-    }
-  }
-
-  def whereis(name: String): Option[String] = {
-    state.regs.find(_._1 == name).map { case (n,u) => u }
-  }
-}
+import org.scalacheck.Prop.propBoolean
+import org.scalacheck.commands.Commands
 
 object CommandsPidRegistration extends Properties("CommandsPidRegistration") {
   import org.scalacheck.Test._
