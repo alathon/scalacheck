@@ -111,9 +111,6 @@ trait Commands {
         val v2 = f(this.get) // Give f() a chance to throw an exception.
         DynamicTerm(id, source, Try(v2))
       } else this.asInstanceOf[Term[U]]
-      
-      //if(isSuccess) DynamicTerm(id, source, Try(f(this.get))) 
-      //else this.asInstanceOf[Term[U]]
     
     def foreach[U](f: T => U): Unit = 
       if(isSuccess) f(this.get)
@@ -125,6 +122,7 @@ trait Commands {
     
     def flatten[U](implicit ev: T <:< Term[U]): Term[U] = this.get
   }
+  
 
   /** The abstract state type. Must be immutable.
    *  The [[State]] type should model the state of the system under
