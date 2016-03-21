@@ -23,10 +23,11 @@ class MultiPidSpawner() {
 
   def listPids(): Seq[String] = state.pids
 
-  def register(uuid: String, name: String): Unit = {
+  def register(uuid: String, name: String): String = {
     if(state.pids.exists(x => x == uuid)) {
       if(!state.regs.exists(x => x._1 == name || x._2 == uuid)) {
         state = state.copy(regs = state.regs ++ Map(name -> uuid))
+        return uuid
       } else {
         throw new Exception("Cannot register a UUID twice.")
       }
@@ -150,28 +151,24 @@ object MultiPidRegistrationSpecification extends Commands {
       sut.listPids()
     }
   }
-  
-  // Things to account for:
-  // 1. No pids yet.
-  // 2. Convert Option[Int] to Int (pids index).
-  // 2.1. Generate random Int between 0 - pids.size if hasn't occured before.
-  // 3. Look up the PID we want to register by index.
+
   case class Register(name: String) extends Command {
     override type Result = String
+    
+    var idx:Option[PidIdx] = None
     
     override def preCondition(state: State) = true
     
     override def run(sut: Sut, s: State): Result = {
-      val pid = {
+      val maybePid = {
         for {
-          pids <- s.pids
-          idx <- getIdx(pids)
-          p <- getPid(idx, s)
-        } yield p
-      } getOrElse "Invalid PID"
-
-      sut.register(pid, name)
-      pid
+          i <- getIdx(s)
+          term <- s.pids
+          pids <- term
+        } yield pids.lift(i)
+      } flatten
+      
+      sut.register(maybePid getOrElse "Invalid PID", name)
     }
 
     override def postCondition(s: State, result: Try[Result]): Prop = {
@@ -187,22 +184,21 @@ object MultiPidRegistrationSpecification extends Commands {
       }
     }
 
-    /* A registration is taken if either the PID is taken, or the name is taken. */
     def regTaken(s: State): Boolean = {
       val toReg = idx map { getPid(_, s) } flatten
-      
+
       s.regs.exists { case (name2, term) =>
-        name == name2 || (toReg.isDefined && term.exists(_ == toReg.get))
+        name == name2 || term.toOption == toReg
       }
     }
-    
-    var idx:Option[PidIdx] = None
 
-    // I really don't like having to write code like this!
-    // TODO: Find a better way to carry information between run()'s.
-    def getIdx(term: Term[Pids]): Option[PidIdx] = {
+    // TODO: This is pretty horrible. Also, this
+    // doesn't survive past shrinking, since
+    // 'idx' is nowhere to be found wrt. State/etc.
+    def getIdx(state: State): Option[PidIdx] = {
       idx orElse {
         for {
+          term <- state.pids
           pids <- term
           i = scala.util.Random.nextInt(pids.size)
         } yield {
