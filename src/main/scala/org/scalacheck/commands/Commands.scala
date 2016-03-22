@@ -32,6 +32,7 @@ trait Commands {
   
   object SymbolicTerm {
     def unapply[T](t: Term[T]): Option[(TermId, Command)] = Some(t.id, t.command)
+    def apply(id: TermId, command: Command) = new Term(id, command, None)
   }
   
   object TermResultTry {
@@ -52,6 +53,7 @@ trait Commands {
   }
 
   object DynamicTerm {
+    def apply[T](id: TermId, command: Command, res: Option[Try[T]]) = new Term[T](id, command, res)
     def unapply[T](t: Term[T]): Option[(TermId, Command, Try[T])] = {
       try {
         for {
@@ -61,11 +63,6 @@ trait Commands {
         case e: Exception => None
       }
     }
-  }
-
-  object Term {
-    def apply(id: TermId, command: Command) = new Term(id, command, None)
-    def apply[T](id: TermId, command: Command, res: Option[Try[T]]) = new Term[T](id, command, res)
   }
 
   sealed class Term[+T](val id: TermId, val command: Command, val res: Option[Try[T]]) { self =>
@@ -109,7 +106,7 @@ trait Commands {
    def map[U](f: T => U): Term[U] = {
      if(hasResult) {
        val r = Try(f(value))
-       Term[U](this.id, this.command, Some(r))
+       DynamicTerm[U](this.id, this.command, Some(r))
      } else {
        this.asInstanceOf[Term[U]]
      }
@@ -117,7 +114,7 @@ trait Commands {
 
    def filter(p: T => Boolean): Term[T] = {
      if(!hasResult || p(value)) this
-     else Term[T](this.id, this.command, None)
+     else DynamicTerm[T](this.id, this.command, None)
    }
    
    def flatten[U](implicit ev: T <:< Term[U]): Term[U] = value
@@ -242,7 +239,7 @@ trait Commands {
     private[Commands] def runPC(sut: Sut, state: State, termId: TermId): (Term[Result], Try[String], State => Prop) = {
       import Prop.BooleanOperators
       val r = Try(run(sut, state))
-      val t = Term[Result](termId, this, Some(r))
+      val t = DynamicTerm[Result](termId, this, Some(r))
       (t, r.map(_.toString), s => preCondition(s) ==> postCondition(s,r))
     }
     
@@ -394,10 +391,10 @@ trait Commands {
         case (Some(states),_) => states
         case (_,Nil) => List(s)
         case (_,cs::Nil) =>
-          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, Term(TermId(0),c)) })
+          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, SymbolicTerm(TermId(0),c)) })
         case _ =>
           val inits = scan(css) { case (cs,x) =>
-            (cs.head.nextState(s, Term(TermId(0), cs.head)), cs.tail::x)
+            (cs.head.nextState(s, SymbolicTerm(TermId(0), cs.head)), cs.tail::x)
           }
           val states = inits.distinct.flatMap(endStates).distinct
           memo += (s,css) -> states
@@ -470,21 +467,21 @@ trait Commands {
         for {
           (s0,cs,terms) <- g
           c <- genCommand(s0) suchThat (_.preCondition(s0))
-          t = Term(TermId(terms.size),c)
+          t = SymbolicTerm(TermId(terms.size),c)
         } yield (c.nextState(s0, t), cs :+ c,terms :+ t)
       }
     }
 
     def cmdsPrecondPar(s: State, cmds: Commands): (State,Boolean) = cmds match {
       case Nil => (s,true)
-      case c::cs if c.preCondition(s) => cmdsPrecondPar(c.nextState(s, Term(TermId(0),c)), cs)
+      case c::cs if c.preCondition(s) => cmdsPrecondPar(c.nextState(s, SymbolicTerm(TermId(0),c)), cs)
       case _ => (s,false)
     }
     
     def cmdsPrecondSeq(s: State, cmds: List[(Command,Term[_])]): (State, Boolean) = 
       cmds match {
         case Nil => (s, true)
-        case (c,t)::cs if c.preCondition(s) => cmdsPrecondSeq(c.nextState(s, Term(t.id,t.command)), cs)
+        case (c,t)::cs if c.preCondition(s) => cmdsPrecondSeq(c.nextState(s, SymbolicTerm(t.id,t.command)), cs)
         case _ => (s, false)
       }
 
