@@ -104,10 +104,9 @@ object MultiPidRegistrationSpecification extends Commands {
     override def preCondition(state: State) = true
     
     override def run(sut: Sut, s: State): Result = {
-      val maybePid = {
+      val maybePid = s.pids flatMap { term =>
         for {
           i <- getIdx(s)
-          term <- s.pids
           pids <- term
         } yield pids.lift(i)
       } flatten
@@ -139,7 +138,7 @@ object MultiPidRegistrationSpecification extends Commands {
     // TODO: This is pretty horrible. Also, this
     // doesn't survive past shrinking, since
     // 'idx' is nowhere to be found wrt. State/etc.
-    // Also-also: This is an uncontrolled, bad way to do side-effects!
+    // Also-also: This is an uncontrolled, bad way to do side-effects
     def getIdx(state: State): Option[Int] = {
       idx orElse {
         for {
