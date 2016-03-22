@@ -28,38 +28,101 @@ trait Commands {
    *  Implicit conversion from a Term[T] to an Option[T]. Useful
    *  in for-notation.
    */
-  implicit def term2OptionVal[T](xo: Term[T]): Option[T] = xo.toOption
+  implicit def term2OptionVal[T](xo: Term[T]): Option[T] = xo.getAsOption
   
-  abstract sealed class Term[+T] { self =>
-    def termId: TermId
+  object SymbolicTerm {
+    def unapply[T](t: Term[T]): Option[(TermId, Command)] = Some(t.id, t.command)
+  }
+  
+  object TermResultTry {
+    def unapply[T](t: Term[T]): Option[Try[T]] = {
+      try {
+        val vTry = for {
+          v <- t.getAsTry
+        } yield v
+        Some(vTry)
+      } catch {
+        case e: Exception => None
+      }
+    }
+  }
+  
+  object TermResult {
+    def unapply[T](t: Term[T]): Option[T] = t.getAsOption
+  }
+
+  object DynamicTerm {
+    def unapply[T](t: Term[T]): Option[(TermId, Command, Try[T])] = {
+      try {
+        for {
+          v <- t.get
+        } yield (t.id, t.command, v)
+      } catch {
+        case e: Exception => None
+      }
+    }
+  }
+
+  object Term {
+    def apply(id: TermId, command: Command) = new Term(id, command, None)
+    def apply[T](id: TermId, command: Command, res: Option[Try[T]]) = new Term[T](id, command, res)
+  }
+
+  sealed class Term[+T](val id: TermId, val command: Command, res: Option[Try[T]]) { self =>
     override def equals(o: Any) = o.isInstanceOf[Term[T]] && 
-      o.asInstanceOf[Term[T]].termId == this.termId
+      o.asInstanceOf[Term[T]].id == this.id
    
-   def isSymbolic: Boolean
+    override def toString() = {
+      val base = "Term(" + id + ", " + command
+      if(hasResult)
+        base + ", " + res + ")"
+      else
+        base + ")"
+    }
+
+   def get: Option[Try[T]] = res
+
+   private[Commands] def getAsTry: Try[T] =
+     if(get.isEmpty) throw new Exception("Term has no result to get.")
+     else get.get
+
+   private[this] def hasResult = get.isDefined && get.get.isSuccess
    
-   def isSuccess: Boolean
+   private[this] def value = get.get.get
    
-   def command: Command
-   
-   def get: T
-   
-   def getAsTry: Try[T]
-    
    def getOrElse[U >: T](default: => U): U =
-     if(isSuccess) get else default
+     if(!hasResult) default else value
      
-   def toOption: Option[T] = if(isSuccess) Some(get) else None
+   private[Commands] def getAsOption: Option[T] = if(hasResult) Some(value) else None
    
    def orElse[U >: T](default: => Term[U]): Term[U] =
-     if(isSuccess) this else default
+     if(!hasResult) default else this
    
-   def foreach[U](f: T => U): Unit
+   def foreach[U](f: T => U): Unit = {
+     if(hasResult) f(value)
+     else ()
+   }
    
-   def flatMap[U](f: T => Term[U]): Term[U]
+   def flatMap[U](f: T => Term[U]): Term[U] = {
+     if(hasResult) f(value)
+     else this.asInstanceOf[Term[U]]
+   }
     
-   def map[U](f: T => U): Term[U]
+   def map[U](f: T => U): Term[U] = {
+     if(hasResult) {
+       val r = Try(f(value))
+       Term[U](this.id, this.command, Some(r))
+     } else {
+       this.asInstanceOf[Term[U]]
+     }
+   }
 
-   def filter(p: T => Boolean): Term[T]
+   def filter(p: T => Boolean): Term[T] = {
+     if(!hasResult || p(value)) this
+     else Term[T](this.id, this.command, None)
+   }
+   
+   def flatten[U](implicit ev: T <:< Term[U]): Term[U] = value
    
    def withFilter(p: T => Boolean): WithFilter = new WithFilter(p)
     
@@ -71,58 +134,6 @@ trait Commands {
      }
    
   }
-  
-  final case class SymbolicTerm[+T](val id: TermId, val source: Command) extends Term[T] {
-    override def toString = "Term("+id+")"
-    def termId = id
-    def command = source
-    def get = throw new Exception("Symbolic terms have no value.")
-    def getAsTry = throw new Exception("Symbolic terms have no value.")
-    def isSymbolic: Boolean = true
-    def isSuccess: Boolean = false
-    
-    def flatMap[U](f: T => Term[U]): Term[U] = this.asInstanceOf[Term[U]]
-    def map[U](f: T => U): Term[U] = this.asInstanceOf[Term[U]]
-    def flatten[U](implicit ev: T <:< Term[U]): Term[U] = this.asInstanceOf[Term[U]]
-    def foreach[U](f: T => U): Unit = ()
-    def filter(p: T => Boolean): Term[T] = this
-    
-  }
-  
-  object DynamicTerm {
-    def apply[T](t: Term[T], r: Try[T]) = new DynamicTerm(t.termId, t.command, r)
-  }
-  
-  final case class DynamicTerm[+T](id: TermId, source: Command, res: Try[T]) extends Term[T] {
-    override def toString = "Term("+id+") => " + res
-    def termId = id
-    def command = source
-    def get = res.get
-    def getAsTry = res
-    def isSymbolic: Boolean = false
-    def isSuccess: Boolean = res.isSuccess
-    
-    def flatMap[U](f: T => Term[U]): Term[U] = 
-      if(isSuccess) f(this.get) 
-      else this.asInstanceOf[Term[U]]
-   
-    def map[U](f: T => U): Term[U] =
-      if(isSuccess) {
-        val v2 = f(this.get) // Give f() a chance to throw an exception.
-        DynamicTerm(id, source, Try(v2))
-      } else this.asInstanceOf[Term[U]]
-    
-    def foreach[U](f: T => U): Unit = 
-      if(isSuccess) f(this.get)
-      else ()
-      
-    def filter(p: T => Boolean): Term[T] =
-      if(!isSuccess || p(this.get)) this
-      else SymbolicTerm(id, source)
-    
-    def flatten[U](implicit ev: T <:< Term[U]): Term[U] = this.get
-  }
-  
 
   /** The abstract state type. Must be immutable.
    *  The [[State]] type should model the state of the system under
@@ -233,7 +244,7 @@ trait Commands {
     private[Commands] def runPC(sut: Sut, state: State, termId: TermId): (Term[Result], Try[String], State => Prop) = {
       import Prop.BooleanOperators
       val r = Try(run(sut, state))
-      val t = DynamicTerm(termId, this, r)
+      val t = Term[Result](termId, this, Some(r))
       (t, r.map(_.toString), s => preCondition(s) ==> postCondition(s,r))
     }
     
@@ -367,7 +378,7 @@ trait Commands {
   private def runSeqCmds(sut: Sut, s0: State, cs: Commands, terms: Seq[Term[_]]
   ): (Prop, State, List[Try[String]], Seq[Term[_]]) = {
     cs.foldLeft((Prop.proved,s0,List[Try[String]](),Seq[Term[_]]())) { case ((p,s,rs,ts),c) =>
-      val (t,r,pf) = c.runPC(sut, s, terms(ts.size).termId)
+      val (t,r,pf) = c.runPC(sut, s, terms(ts.size).id)
       (p && pf(s), c.nextState(s, t), rs :+ r, ts :+ t)
     }
   }
@@ -385,10 +396,10 @@ trait Commands {
         case (Some(states),_) => states
         case (_,Nil) => List(s)
         case (_,cs::Nil) =>
-          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, SymbolicTerm(TermId(0),c)) })
+          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, Term(TermId(0),c)) })
         case _ =>
           val inits = scan(css) { case (cs,x) =>
-            (cs.head.nextState(s, SymbolicTerm(TermId(0), cs.head)), cs.tail::x)
+            (cs.head.nextState(s, Term(TermId(0), cs.head)), cs.tail::x)
           }
           val states = inits.distinct.flatMap(endStates).distinct
           memo += (s,css) -> states
@@ -461,21 +472,21 @@ trait Commands {
         for {
           (s0,cs,terms) <- g
           c <- genCommand(s0) suchThat (_.preCondition(s0))
-          t = SymbolicTerm(TermId(terms.size),c)
+          t = Term(TermId(terms.size),c)
         } yield (c.nextState(s0, t), cs :+ c,terms :+ t)
       }
     }
 
     def cmdsPrecondPar(s: State, cmds: Commands): (State,Boolean) = cmds match {
       case Nil => (s,true)
-      case c::cs if c.preCondition(s) => cmdsPrecondPar(c.nextState(s, SymbolicTerm(TermId(0),c)), cs)
+      case c::cs if c.preCondition(s) => cmdsPrecondPar(c.nextState(s, Term(TermId(0),c)), cs)
       case _ => (s,false)
     }
     
     def cmdsPrecondSeq(s: State, cmds: List[(Command,Term[_])]): (State, Boolean) = 
       cmds match {
         case Nil => (s, true)
-        case (c,t)::cs if c.preCondition(s) => cmdsPrecondSeq(c.nextState(s, SymbolicTerm(t.termId,t.command)), cs)
+        case (c,t)::cs if c.preCondition(s) => cmdsPrecondSeq(c.nextState(s, Term(t.id,t.command)), cs)
         case _ => (s, false)
       }
 

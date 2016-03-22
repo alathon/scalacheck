@@ -128,9 +128,8 @@ object PidRegistrationSpecification extends Commands{
     }
     
     override def run(sut: Sut, s: State): Result = {
-      // Variant 0: For-notation
       for {
-        term <- findPid(s)      
+        term <- findPid(s)
         pidName <- term
       } yield sut.register(pidName, name)
     }

@@ -7,6 +7,7 @@ import scala.util.Try
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
 import scala.language.postfixOps
+import scala.util.Success
 
 object CommandsMultiPidRegistration extends Properties("CommandsMultiPidRegistration") {
   property("multipidregspec") = MultiPidRegistrationSpecification.property(threadCount = 1)
@@ -73,8 +74,7 @@ object MultiPidRegistrationSpecification extends Commands {
   
   def getPid(idx: Int, s: State): Option[String] = {
       for {
-        term <- s.pids
-        pids <- term
+        TermResult(pids) <- s.pids
       } yield pids.lift(idx)
     } flatten
 
@@ -104,10 +104,10 @@ object MultiPidRegistrationSpecification extends Commands {
     override def preCondition(state: State) = true
     
     override def run(sut: Sut, s: State): Result = {
-      val maybePid = s.pids flatMap { term =>
+      val maybePid = {
         for {
+          TermResult(pids) <- s.pids
           i <- getIdx(s)
-          pids <- term
         } yield pids.lift(i)
       } flatten
       
@@ -130,8 +130,10 @@ object MultiPidRegistrationSpecification extends Commands {
     def regTaken(s: State): Boolean = {
       val toReg = idx map { getPid(_, s) } flatten
 
-      s.regs.exists { case (name2, term) =>
-        name == name2 || term.toOption == toReg
+      s.regs.exists { 
+        case (name2, TermResult(reg)) =>
+          name == name2 || Some(reg) == toReg
+        case (name2, _) => name == name2
       }
     }
 
@@ -142,8 +144,7 @@ object MultiPidRegistrationSpecification extends Commands {
     def getIdx(state: State): Option[Int] = {
       idx orElse {
         for {
-          term <- state.pids
-          pids <- term
+          TermResult(pids) <- state.pids
           i = scala.util.Random.nextInt(pids.size)
         } yield {
           idx = Some(i)
@@ -163,8 +164,7 @@ object MultiPidRegistrationSpecification extends Commands {
     override def postCondition(s: State, result: Try[Result]): Prop = {
       result map { pid1 =>
         val pid2 = for {
-          (_, term) <- s.regs.find(_._1 == name)
-          pid <- term
+          (_, TermResult(pid)) <- s.regs.find(_._1 == name)
         } yield pid
         
         pid1 == pid2
