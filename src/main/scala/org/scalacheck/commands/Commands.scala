@@ -55,7 +55,7 @@ trait Commands {
     def unapply[T](t: Term[T]): Option[(TermId, Command, Try[T])] = {
       try {
         for {
-          v <- t.get
+          v <- t.res
         } yield (t.id, t.command, v)
       } catch {
         case e: Exception => None
@@ -68,7 +68,7 @@ trait Commands {
     def apply[T](id: TermId, command: Command, res: Option[Try[T]]) = new Term[T](id, command, res)
   }
 
-  sealed class Term[+T](val id: TermId, val command: Command, res: Option[Try[T]]) { self =>
+  sealed class Term[+T](val id: TermId, val command: Command, val res: Option[Try[T]]) { self =>
     override def equals(o: Any) = o.isInstanceOf[Term[T]] && 
       o.asInstanceOf[Term[T]].id == this.id
    
@@ -80,15 +80,13 @@ trait Commands {
         base + ")"
     }
 
-   def get: Option[Try[T]] = res
-
    private[Commands] def getAsTry: Try[T] =
-     if(get.isEmpty) throw new Exception("Term has no result to get.")
-     else get.get
+     if(res.isEmpty) throw new Exception("Term has no result to get.")
+     else res.get
 
-   private[this] def hasResult = get.isDefined && get.get.isSuccess
+   private[this] def hasResult = res.isDefined && res.get.isSuccess
    
-   private[this] def value = get.get.get
+   private[this] def value = res.get.get
    
    def getOrElse[U >: T](default: => U): U =
      if(!hasResult) default else value
