@@ -16,7 +16,7 @@ class MultiPidSpawner() {
   def register(uuid: String, name: String): String = {
     if(state.pids.exists(x => x == uuid)) {
       if(!state.regs.exists(x => x._1 == name || x._2 == uuid)) {
-        state = state.copy(regs = state.regs ++ Map(name -> uuid))
+        //state = state.copy(regs = state.regs ++ Map(name -> uuid))
         return uuid
       } else {
         throw new Exception("Cannot register a UUID twice.")

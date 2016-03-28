@@ -54,14 +54,10 @@ trait Commands {
 
   object DynamicTerm {
     def apply[T](id: TermId, command: Command, res: Option[Try[T]]) = new Term[T](id, command, res)
-    def unapply[T](t: Term[T]): Option[(TermId, Command, Try[T])] = {
-      try {
-        for {
-          v <- t.res
-        } yield (t.id, t.command, v)
-      } catch {
-        case e: Exception => None
-      }
+    def unapply[T](t: Term[T]): Option[(TermId, Command, Try[T])] = {    
+      for {
+        v <- t.res
+      } yield (t.id, t.command, v)
     }
   }
 
@@ -127,7 +123,6 @@ trait Commands {
        def foreach[U](f: T => U): Unit = self filter p foreach(f)
        def withFilter(q: T => Boolean): WithFilter = new WithFilter(x => p(x) && q(x))
      }
-   
   }
 
   /** The abstract state type. Must be immutable.
