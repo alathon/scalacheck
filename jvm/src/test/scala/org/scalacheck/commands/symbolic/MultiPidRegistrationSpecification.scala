@@ -18,7 +18,7 @@ object CommandsMultiPidRegistration extends Properties("CommandsMultiPidRegistra
   override def main(args: Array[String]): Unit = {
     val res = StandaloneSnippet.run(props = this, 
         snippet = MultiPidRegistrationSpecification.snippet, 
-        shrink = false)
+        shrink = true)
   
     for {
       r <- res if r.result.passed == false
