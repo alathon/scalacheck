@@ -1,6 +1,7 @@
 package org.scalacheck.commands.symbolic
 
 import org.scalacheck._
+import org.scalacheck.Test.Failed
 import org.scalacheck.commands._
 import org.scalacheck.Gen._
 import scala.util.Try
@@ -8,12 +9,36 @@ import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
 import scala.language.postfixOps
 import scala.util.Success
+import java.io.PrintWriter
+import java.io.File
 
 object CommandsMultiPidRegistration extends Properties("CommandsMultiPidRegistration") {
   property("multipidregspec") = MultiPidRegistrationSpecification.property(threadCount = 1)
+  
+  override def main(args: Array[String]): Unit = {
+    val res = StandaloneSnippet.run(props = this, 
+        snippet = MultiPidRegistrationSpecification.snippet, 
+        shrink = false)
+  
+    for {
+      r <- res if r.result.passed == false
+      writer = new PrintWriter(new File(r.name + ".scala"))
+      log = new PrintWriter(new File(r.name + ".log"))
+    } yield {
+      r.result.status match {
+        case Failed(x::xs, labels) => {
+          //log.write(labels(0) toString) // TODO::: This is not making any sense.. Argh...
+        }
+        case _ =>
+      }
+      log.close()
+      writer.write(r.snippetText)
+      writer.close()
+    }
+  }
 }
 
-object MultiPidRegistrationSpecification extends Commands {
+object MultiPidRegistrationSpecification extends Commands with RunnableSnippet {
   
   type Sut = MultiPidSpawner
   
@@ -97,9 +122,16 @@ object MultiPidRegistrationSpecification extends Commands {
   }
 
   case class Register(name: String) extends Command {
-    override type Result = String
+    override type Metadata = Option[Int]
     
-    var idx:Option[Int] = None
+    override def genMetadata(s: State): Metadata = {
+      for {
+        TermResult(pids) <- s.pids
+        i = scala.util.Random.nextInt(pids.size)
+      } yield i
+    }
+    
+    override type Result = String
     
     override def preCondition(state: State) = true
     
@@ -107,7 +139,7 @@ object MultiPidRegistrationSpecification extends Commands {
       val maybePid = {
         for {
           TermResult(pids) <- s.pids
-          i <- getIdx(s)
+          i <- maybeSetMetadata(s)
         } yield pids.lift(i)
       } flatten
       
@@ -126,30 +158,14 @@ object MultiPidRegistrationSpecification extends Commands {
         s.copy(regs = s.regs ++ Map(name -> v))
       }
     }
-
+    
     def regTaken(s: State): Boolean = {
-      val toReg = idx map { getPid(_, s) } flatten
+        val toReg = (getMetadata flatten) map { getPid(_, s) } flatten
 
       s.regs.exists { 
         case (name2, TermResult(reg)) =>
           name == name2 || Some(reg) == toReg
         case (name2, _) => name == name2
-      }
-    }
-
-    // TODO: This is pretty horrible. Also, this
-    // doesn't survive past shrinking, since
-    // 'idx' is nowhere to be found wrt. State/etc.
-    // Also-also: This is an uncontrolled, bad way to do side-effects
-    def getIdx(state: State): Option[Int] = {
-      idx orElse {
-        for {
-          TermResult(pids) <- state.pids
-          i = scala.util.Random.nextInt(pids.size)
-        } yield {
-          idx = Some(i)
-          i
-        }
       }
     }
   }

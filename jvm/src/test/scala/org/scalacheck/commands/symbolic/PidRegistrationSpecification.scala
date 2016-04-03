@@ -8,14 +8,38 @@ import org.scalacheck.Properties
 import scala.util.Failure
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
+import java.io.PrintWriter
+import java.io.File
 
 object CommandsPidRegistration extends Properties("CommandsPidRegistration") {
   import org.scalacheck.Test._
   
   property("pidregspec") = PidRegistrationSpecification.property()
+  
+  override def main(args: Array[String]): Unit = {
+    val res = StandaloneSnippet.run(props = this, 
+        snippet = PidRegistrationSpecification.snippet, 
+        shrink = false)
+
+    for {
+      r <- res if r.result.passed == false
+      writer = new PrintWriter(new File(r.name + ".scala"))
+      log = new PrintWriter(new File(r.name + ".log"))
+    } yield {
+      r.result.status match {
+        case Failed(x::xs, labels) => {
+          log.write(labels.toString) // TODO::: This is not making any sense.. Argh...
+        }
+        case _ =>
+      }
+      log.close()
+      writer.write(r.snippetText)
+      writer.close()
+    }
+  }
 }
 
-object PidRegistrationSpecification extends Commands{
+object PidRegistrationSpecification extends Commands  with RunnableSnippet {
   
   type Sut = PidSpawner
 
@@ -89,7 +113,6 @@ object PidRegistrationSpecification extends Commands{
   }
 
   case class Spawn() extends Command {
-    
     override type Result = String
 
     override def preCondition(s: State): Boolean = true

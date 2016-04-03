@@ -43,6 +43,7 @@ lazy val sharedSettings = MimaSettings.settings ++ Seq(
   unmanagedSourceDirectories in Test += (baseDirectory in LocalRootProject).value / "src" / "test" / "scala",
 
   resolvers += "sonatype" at "https://oss.sonatype.org/content/repositories/releases",
+  resolvers += "com.todesking" at "http://todesking.github.io/mvn",
 
   javacOptions += "-Xmx1024M",
 
@@ -95,5 +96,6 @@ lazy val jvm = project.in(file("jvm"))
   .settings(sharedSettings: _*)
   .settings(
     previousArtifact := None,
-    libraryDependencies += "org.scala-sbt" %  "test-interface" % "1.0"
+    libraryDependencies += "org.scala-sbt" %  "test-interface" % "1.0",
+    libraryDependencies += "com.todesking" %% "scala-pp" % "0.0.4"
   )

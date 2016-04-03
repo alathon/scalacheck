@@ -12,6 +12,7 @@ package org.scalacheck.commands
 import org.scalacheck._
 import scala.util.{Try, Success, Failure}
 import scala.language.implicitConversions
+import pprint.Config.Defaults._
 
 /** An API for stateful testing in ScalaCheck.
  *
@@ -24,6 +25,8 @@ trait Commands {
     override def toString = id.toString
   }
   
+  implicit def int2TermId(xo: Int): TermId = TermId(xo)
+  
   /*
    *  Implicit conversion from a Term[T] to an Option[T]. Useful
    *  in for-notation.
@@ -31,8 +34,8 @@ trait Commands {
   implicit def term2OptionVal[T](xo: Term[T]): Option[T] = xo.getAsOption
   
   object SymbolicTerm {
-    def unapply[T](t: Term[T]): Option[(TermId, Command)] = Some(t.id, t.command)
-    def apply(id: TermId, command: Command) = new Term(id, command, None)
+    def unapply[T](t: Term[T]): Option[TermId] = Some(t.id)
+    def apply(id: TermId) = new Term(id, None)
   }
   
   object TermResultTry {
@@ -53,20 +56,25 @@ trait Commands {
   }
 
   object DynamicTerm {
-    def apply[T](id: TermId, command: Command, res: Option[Try[T]]) = new Term[T](id, command, res)
-    def unapply[T](t: Term[T]): Option[(TermId, Command, Try[T])] = {    
+    def apply[T](id: TermId, res: Option[Try[T]]) = new Term[T](id, res)
+    def unapply[T](t: Term[T]): Option[(TermId, Try[T])] = {    
       for {
         v <- t.res
-      } yield (t.id, t.command, v)
+      } yield (t.id, v)
     }
   }
 
-  sealed class Term[+T](val id: TermId, val command: Command, val res: Option[Try[T]]) { self =>
+  object Term {
+    def apply[T](id: TermId, res: Option[Try[T]]) = DynamicTerm.apply(id, res)
+    def apply[T](id: TermId) = SymbolicTerm.apply(id)
+  }
+  
+  sealed class Term[+T](val id: TermId, val res: Option[Try[T]]) { self =>
     override def equals(o: Any) = o.isInstanceOf[Term[T]] && 
       o.asInstanceOf[Term[T]].id == this.id
    
     override def toString() = {
-      val base = "Term(" + id + ", " + command
+      val base = "Term(" + id
       if(hasResult)
         base + ", " + res + ")"
       else
@@ -102,7 +110,7 @@ trait Commands {
    def map[U](f: T => U): Term[U] = {
      if(hasResult) {
        val r = Try(f(value))
-       DynamicTerm[U](this.id, this.command, Some(r))
+       DynamicTerm[U](this.id, Some(r))
      } else {
        this.asInstanceOf[Term[U]]
      }
@@ -110,7 +118,7 @@ trait Commands {
 
    def filter(p: T => Boolean): Term[T] = {
      if(!hasResult || p(value)) this
-     else DynamicTerm[T](this.id, this.command, None)
+     else DynamicTerm[T](this.id, None)
    }
    
    def flatten[U](implicit ev: T <:< Term[U]): Term[U] = value
@@ -201,6 +209,33 @@ trait Commands {
    *  This type should be immutable and implement the equality operator
    *  properly. */
   trait Command {
+    /** The Metadata type is used for a value that can be set once, which is guaranteed to stay the same
+     *  across shrinking. This is occasionally useful for generating an undeterministic value during run()
+     *  that must be kept in subsequent shrinks, such as a randomly chosen List index. However, as this
+     *  introduces side-effects and additional state, use with caution!
+     *  
+     *  To use Metadata, define the type Metadata and override genMetadata(State). Then use maybeSetMetadata(State) to 
+     *  set the value during run(), and getMetadata() to fetch the value during e.g. preCondition() or postCondition(). Note that
+     *  getMetadata() will always be None, until maybeSetMetadata() has run at least once.
+     */
+    type Metadata
+    
+    private[this] var metadata: Option[Metadata] = None
+    
+    def getMetadata: Option[Metadata] = metadata
+    
+    def genMetadata(s: State): Metadata = throw new Exception("genMetadata() must be overwritten if you use Metadata!")
+    
+    def maybeSetMetadata(s: State): Metadata = {
+      metadata match {
+        case None => {
+          metadata = Some(genMetadata(s))
+          metadata.get
+        }
+        case Some(m) => m
+      }
+    }
+      
     /** An abstract representation of the result of running this command in
      *  the system under test. The [[Result]] type should be immutable
      *  and it should encode everything about the command run that is necessary
@@ -228,13 +263,13 @@ trait Commands {
      *  or not, given the system was in the provided state before the command
      *  ran. */
     def postCondition(state: State, result: Try[Result]): Prop
-
+    
     /** Wraps the run and postCondition methods in order not to leak the
      *  dependant Result type. */
     private[Commands] def runPC(sut: Sut, state: State, termId: TermId): (Term[Result], Try[String], State => Prop) = {
       import Prop.BooleanOperators
       val r = Try(run(sut, state))
-      val t = DynamicTerm[Result](termId, this, Some(r))
+      val t = DynamicTerm[Result](termId, Some(r))
       (t, r.map(_.toString), s => preCondition(s) ==> postCondition(s,r))
     }
     
@@ -345,9 +380,9 @@ trait Commands {
   def shrinkState: Shrink[State] = implicitly
 
   // Private methods //
-  private type Commands = List[Command]
+  type Commands = List[Command]
 
-  private case class Actions(
+  case class Actions(
     s: State, seqCmds: Commands, seqTerms: Seq[Term[_]], parCmds: List[Commands]
   )
 
@@ -386,10 +421,10 @@ trait Commands {
         case (Some(states),_) => states
         case (_,Nil) => List(s)
         case (_,cs::Nil) =>
-          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, SymbolicTerm(TermId(0),c)) })
+          List(cs.init.foldLeft(s) { case (s0,c) => c.nextState(s0, SymbolicTerm(TermId(0))) })
         case _ =>
           val inits = scan(css) { case (cs,x) =>
-            (cs.head.nextState(s, SymbolicTerm(TermId(0), cs.head)), cs.tail::x)
+            (cs.head.nextState(s, SymbolicTerm(TermId(0))), cs.tail::x)
           }
           val states = inits.distinct.flatMap(endStates).distinct
           memo += (s,css) -> states
@@ -425,10 +460,13 @@ trait Commands {
     cs.mkString("(","; ",")")
   }
 
-  private def prettyTermsRes(rs: Seq[Term[_]]) = {
+  private def prettyTermsRes(rs: Seq[(Command,Term[_])]) = {
     val ts = rs.map {
-      case DynamicTerm(TermId(id),cmd,res) => s"${id} => ${cmd} = ${res}"
-      case SymbolicTerm(TermId(id),cmd) => s"${id}"
+      case (cmd, DynamicTerm(TermId(id),res)) => {
+        val metadata = cmd.getMetadata.map(m => s" { Metadata=${m} }") getOrElse ""
+        s"${id} => ${cmd}${metadata} = ${res}"
+      }
+      case (cmd, SymbolicTerm(TermId(id))) => s"${id}"
     }
     ts.mkString("\n\t")
   }
@@ -438,7 +476,7 @@ trait Commands {
     val (p1, s, rs1, ts1) = runSeqCmds(sut, as.s, as.seqCmds, as.seqTerms)
     val l1 =  s"initialstate = ${as.s}\n" +
               s"seqcmds = ${prettyCmdsRes(as.seqCmds zip rs1)}\n" +
-              s"terms = ${prettyTermsRes(ts1)}\n"
+              s"terms = ${prettyTermsRes(as.seqCmds zip ts1)}\n"
     if(as.parCmds.isEmpty) p1 :| l1
     else propAnd(p1.flatMap{r => if(!r.success) finalize; Prop(prms => r)} :| l1, {
       try{
@@ -462,21 +500,21 @@ trait Commands {
         for {
           (s0,cs,terms) <- g
           c <- genCommand(s0) suchThat (_.preCondition(s0))
-          t = SymbolicTerm(TermId(terms.size),c)
+          t = SymbolicTerm(TermId(terms.size))
         } yield (c.nextState(s0, t), cs :+ c,terms :+ t)
       }
     }
 
     def cmdsPrecondPar(s: State, cmds: Commands): (State,Boolean) = cmds match {
       case Nil => (s,true)
-      case c::cs if c.preCondition(s) => cmdsPrecondPar(c.nextState(s, SymbolicTerm(TermId(0),c)), cs)
+      case c::cs if c.preCondition(s) => cmdsPrecondPar(c.nextState(s, SymbolicTerm(TermId(0))), cs)
       case _ => (s,false)
     }
     
     def cmdsPrecondSeq(s: State, cmds: List[(Command,Term[_])]): (State, Boolean) = 
       cmds match {
         case Nil => (s, true)
-        case (c,t)::cs if c.preCondition(s) => cmdsPrecondSeq(c.nextState(s, SymbolicTerm(t.id,t.command)), cs)
+        case (c,t)::cs if c.preCondition(s) => cmdsPrecondSeq(c.nextState(s, SymbolicTerm(t.id)), cs)
         case _ => (s, false)
       }
 
