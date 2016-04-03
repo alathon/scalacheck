@@ -29,14 +29,18 @@ object StandaloneSnippet {
 }
 
 object ScalaStatements {
-
-  def commandSnippet(i: Int): Seq[String] = Seq(
-    s"val r${i} = Try(c${i}.run(sut, s${i}))",
-    s"val p${i} = c${i}.postCondition(s${i}, r${i}).apply(org.scalacheck.Gen.Parameters.default).status",
-    s"val t${i} = DynamicTerm(TermId(${i}), Some(r${i}))",
-    s"val s${i+1} = c${i}.nextState(s${i}, t${i})",
-    s"""println("${i} => " + c${i} + " = " + r${i})""",
-    s"""println("\tc${i}.postCondition => " + p${i})""",
+  
+  def utils: String = s"""
+  def cmdFormat(c: Command): String = ScalaPP.format(c) + (c.getMetadata map { m => " { Metadata: " + ScalaPP.format(m) + " }" } getOrElse "")
+  def resultFormat[T](r: Try[T]): String = r.map(ScalaPP.format(_)).getOrElse(ScalaPP.format(r))"""
+  
+  def commandSnippet(cmdIdx: Int, stateIdx: Int): Seq[String] = Seq(
+    s"val r${cmdIdx} = Try(c${cmdIdx}.run(sut, s${stateIdx}))",
+    s"val p${cmdIdx} = c${cmdIdx}.postCondition(s${stateIdx}, r${cmdIdx}).apply(org.scalacheck.Gen.Parameters.default).status",
+    s"val t${cmdIdx} = DynamicTerm(TermId(${cmdIdx}), Some(r${cmdIdx}))",
+    s"val s${stateIdx+1} = c${cmdIdx}.nextState(s${stateIdx}, t${cmdIdx})",
+    s"""println("c${cmdIdx} => " + cmdFormat(c${cmdIdx}) + " = " + resultFormat(r${cmdIdx}))""",
+    s"""println("\tc${cmdIdx}.postCondition => " + p${cmdIdx})""",
     "")
     
   def packageStmt(s:String) = s"package ${s}"
@@ -45,6 +49,7 @@ object ScalaStatements {
   
   def objStmt(name: String, body: String) = s"""
 object ${name} {
+${utils}
 ${body}
 }"""
 
@@ -66,7 +71,7 @@ trait RunnableSnippet extends Commands {
   val objName = s"Snippet${scala.util.Random.nextInt(100000)}"
   val specName = this.getClass.getName.split('.').last.dropRight(1)
   val packageName = this.getClass.getName().split('.').dropRight(1).mkString(".")
-  val imports = List("scala.util.Try", "org.scalacheck.commands._", s"${specName}._")
+  val imports = List("scala.util.Try", "org.scalacheck.commands._", s"${specName}._", "com.todesking.scalapp.ScalaPP")
   
   def commandInit(c: Command, idx: Int): String = {
     val metadata = c.getMetadata map { m => s"{ override def genMetadata(s: State) = ${ScalaPP.format(m)} }" } getOrElse ""
@@ -74,15 +79,24 @@ trait RunnableSnippet extends Commands {
   }
   
   def actionsSnippet(a: Actions): Seq[String] = {
-    val (commands, commandsRun, _) = a.seqCmds.foldLeft((List[String](), List[String](), 0)) {
+    a.seqCmds.pp
+    a.seqTerms.pp
+    
+    val (commands, commandsRun, _) = a.seqCmds.zip(a.seqTerms).foldLeft((List[String](), List[String](), 0)) {
+      case ((lst1, lst2, stateIdx), (c,t)) => {
+        (lst1 ++ List(commandInit(c, t.id.id)),
+         lst2 ++ ScalaStatements.commandSnippet(t.id.id, stateIdx),
+         stateIdx + 1)
+      }
+    }
+    
+    /*val (commands, commandsRun, _) = a.seqCmds.foldLeft((List[String](), List[String](), 0)) {
       case ((lst1, lst2, i), c: Command) => {
-        
-        
         (lst1 ++ List(commandInit(c,i)), 
          lst2 ++ ScalaStatements.commandSnippet(i),
          i + 1)
       }
-    }
+    }*/
     
     Seq(
         s"val s0 = ${specName}.${a.s}",

@@ -19,10 +19,10 @@ object CommandsPidRegistration extends Properties("CommandsPidRegistration") {
   override def main(args: Array[String]): Unit = {
     val res = StandaloneSnippet.run(props = this, 
         snippet = PidRegistrationSpecification.snippet, 
-        shrink = false)
+        shrink = true)
 
     for {
-      r <- res if r.result.passed == false
+      r <- res
       writer = new PrintWriter(new File(r.name + ".scala"))
       log = new PrintWriter(new File(r.name + ".log"))
     } yield {

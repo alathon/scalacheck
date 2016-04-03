@@ -21,13 +21,13 @@ object CommandsMultiPidRegistration extends Properties("CommandsMultiPidRegistra
         shrink = true)
   
     for {
-      r <- res if r.result.passed == false
+      r <- res// if r.result.passed == false
       writer = new PrintWriter(new File(r.name + ".scala"))
       log = new PrintWriter(new File(r.name + ".log"))
     } yield {
       r.result.status match {
         case Failed(x::xs, labels) => {
-          //log.write(labels(0) toString) // TODO::: This is not making any sense.. Argh...
+          log.write(labels toString) // TODO::: This is not making any sense.. Argh...
         }
         case _ =>
       }
