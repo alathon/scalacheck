@@ -79,9 +79,6 @@ trait RunnableSnippet extends Commands {
   }
   
   def actionsSnippet(a: Actions): Seq[String] = {
-    a.seqCmds.pp
-    a.seqTerms.pp
-    
     val (commands, commandsRun, _) = a.seqCmds.zip(a.seqTerms).foldLeft((List[String](), List[String](), 0)) {
       case ((lst1, lst2, stateIdx), (c,t)) => {
         (lst1 ++ List(commandInit(c, t.id.id)),
@@ -89,15 +86,7 @@ trait RunnableSnippet extends Commands {
          stateIdx + 1)
       }
     }
-    
-    /*val (commands, commandsRun, _) = a.seqCmds.foldLeft((List[String](), List[String](), 0)) {
-      case ((lst1, lst2, i), c: Command) => {
-        (lst1 ++ List(commandInit(c,i)), 
-         lst2 ++ ScalaStatements.commandSnippet(i),
-         i + 1)
-      }
-    }*/
-    
+
     Seq(
         s"val s0 = ${specName}.${a.s}",
         s"val sut = ${specName}.newSut(s0)") ++ Seq("") ++ commands ++ Seq("") ++ commandsRun  
