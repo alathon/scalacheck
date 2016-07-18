@@ -2,9 +2,6 @@ package org.scalacheck.commands.symbolic
 
 import org.scalacheck._
 import org.scalacheck.Test.Failed
-import org.scalacheck.Test.Exhausted
-import org.scalacheck.Test.Passed
-import org.scalacheck.Test.Proved
 import org.scalacheck.commands._
 import org.scalacheck.Gen._
 import scala.util.Try
@@ -14,13 +11,16 @@ import scala.language.postfixOps
 import scala.util.Success
 import java.io.PrintWriter
 import java.io.File
+import com.todesking.scalapp.syntax._
+import com.todesking.scalapp.ScalaPP
+import scala.util.Failure
 
-object CommandsMultiPidRegistration extends Properties("CommandsMultiPidRegistration") {
-  property("multipidregspec") = MultiPidRegistrationSpecification.property(threadCount = 1)
+object CommandsMultiPidRegistration2 extends Properties("CommandsMultiPidRegistration2") {
+  property("multipidspec2") = MultiPidRegistrationSpecification2.property(threadCount = 1)
   
   override def main(args: Array[String]): Unit = {
     val res = StandaloneSnippet.run(props = this, 
-        snippet = MultiPidRegistrationSpecification.snippet, 
+        snippet = MultiPidRegistrationSpecification2.snippet, 
         shrink = true)
   
     for {
@@ -30,28 +30,29 @@ object CommandsMultiPidRegistration extends Properties("CommandsMultiPidRegistra
     } yield {
       r.result.status match {
         case Failed(x::xs, labels) => {
-          println(labels toString)
+          println(labels)
           log.write(labels toString)
         }
         case _ =>
-          println("Status: " + r.result.status.toString)
       }
       log.close()
       writer.write(r.snippetText)
       writer.close()
     }
   }
+  
 }
 
-object MultiPidRegistrationSpecification extends Commands with RunnableSnippet {
+object MultiPidRegistrationSpecification2 extends Commands with RunnableSnippet {
   
   type Sut = MultiPidSpawner
   
   case class State(
-    pids: Option[Term[Seq[String]]],
+    listOfPids: Option[Term[Seq[String]]],
+    pids: Seq[Term[String]],
     regs: Map[String, Term[String]])
 
-  override def genInitialState: Gen[State] = State(pids = None, regs = Map.empty)
+  override def genInitialState: Gen[State] = State(listOfPids = None, pids = Seq.empty, regs = Map.empty)
 
   override def canCreateNewSut(newState: State, initSuts: Traversable[State],
                                runningSuts: Traversable[Sut]
@@ -69,51 +70,42 @@ object MultiPidRegistrationSpecification extends Commands with RunnableSnippet {
   }
   
   def genCommand(state: State): Gen[Command] = frequency(
-      (50, genListPids),
+      (1, genListPids),
+      (5, genGetPid(state)),
       (20, genRegister(state)),
       (20, genUnregister(state)),
-      (20, genUnregisterRandom),
-      (5, genWhereIsRandom),
-      (20, genWhereIs(state))
+      (5, genWhereIs(state))
     )
 
-  def genListPids: Gen[ListPids] = ListPids()
+  def genListPids: Gen[Command] = ListPids()
   
-  def genRegister(state: State) = for {
-      name <- Gen.identifier
-    } yield Register(name)
+  def genGetPid(state: State): Gen[Command] =
+    if(state.listOfPids.isEmpty) genListPids 
+    else GetPid()
 
-  def genUnregister(state: State) =
-    if(state.regs.isEmpty) genRegister(state) else for {
+  def genRegister(state: State): Gen[Command] = 
+    if(state.pids.isEmpty) genGetPid(state) else for {
+      name <- Gen.resize(3, identifier)
+      pid <- oneOf(state.pids.toSeq)
+    } yield Register(pid, name)
+
+  def genUnregister(state: State): Gen[Command] =
+    if(state.regs.isEmpty) genGetPid(state) else for {
       (name,_) <- oneOf(state.regs.toSeq)
     } yield Unregister(name)
 
-  def genUnregisterRandom = for {
-    name <- Gen.identifier
-  } yield Unregister(name)
-
-  def genWhereIsRandom = for {
-      id <- Gen.identifier
-    } yield WhereIs(id)
-
-  def genWhereIs(state: State) =
-    if(state.regs.isEmpty) genWhereIsRandom else for {
+  def genWhereIs(state: State): Gen[Command] =
+    if(state.regs.isEmpty) genGetPid(state) else for {
       (id,_) <- oneOf(state.regs.toSeq)
     } yield WhereIs(id)
   
-  def getPid(idx: Int, s: State): Option[String] = {
-      for {
-        TermResult(pids) <- s.pids
-      } yield pids.lift(idx)
-    } flatten
-
   case class ListPids() extends Command {
     override type Result = Seq[String]
     
     override def preCondition(s: State): Boolean = true
     
     override def nextState(s: State, v:Term[Result]) = {
-      s.copy(pids = Option(v))
+      s.copy(listOfPids = Option(v))
     }
     
     override def postCondition(s: State, result: Try[Result]): Prop = {
@@ -125,62 +117,80 @@ object MultiPidRegistrationSpecification extends Commands with RunnableSnippet {
     }
   }
 
-  case class Register(name: String) extends Command {
+  case class Register(pid: Term[String], name: String) extends Command {
+    override type Result = String
+    
+    override def preCondition(state: State) = state.pids.exists(_.id == pid.id)
+    
+    override def run(sut: Sut, s: State): Result = {
+      pid.resolve(s.pids) map { p =>
+        sut.register(p, name)
+      } getOrElse(throw new Exception("Failed to resolve pid " + pid.id))
+    }
+
+    override def postCondition(s: State, result: Try[Result]): Prop = {
+      if(regTaken(s)) result.isFailure
+      else result.isSuccess
+    }
+    
+    override def nextState(s: State, v:Term[Result]) = {
+      if(regTaken(s)) s
+      else s.copy(regs = s.regs ++ Map(name -> v))
+    }
+    
+    def regTaken(s: State): Boolean = s.regs.exists { case (name2, _) => name == name2 }
+  }
+
+  case class GetPid() extends Command {
     override type Metadata = Option[Int]
     
     override def genMetadata(s: State): Metadata = {
+      val a = for {
+        t <- s.listOfPids
+        pids <- t
+      } yield {
+        5
+      }
       for {
-        TermResult(pids) <- s.pids
+        TermResult(pids) <- s.listOfPids
         i = scala.util.Random.nextInt(pids.size)
       } yield i
     }
     
     override type Result = String
     
-    override def preCondition(state: State) = true
+    override def preCondition(s: State): Boolean = s.listOfPids.isDefined
+    
+    override def nextState(s: State, v:Term[Result]) = s.copy(pids = s.pids ++ Seq(v))
+    
+    override def postCondition(s: State, result: Try[Result]): Prop = true
     
     override def run(sut: Sut, s: State): Result = {
-      val maybePid = {
-        for {
-          TermResult(pids) <- s.pids
-          i <- maybeSetMetadata(s)
-        } yield pids.lift(i)
-      } flatten
-      
-      sut.register(maybePid getOrElse "Invalid PID", name)
-    }
+      val pid = for {
+        TermResult(pids) <- s.listOfPids
+        i <- maybeSetMetadata(s)
+      } yield pids(i)
 
-    override def postCondition(s: State, result: Try[Result]): Prop = {
-      if(regTaken(s) || s.pids.isEmpty) result.isFailure
-      else result.isSuccess
+      pid.get
     }
-    
-    override def nextState(s: State, v:Term[Result]) = {
-      if(regTaken(s) || s.pids.isEmpty) {
-        s
-      } else {
-        s.copy(regs = s.regs ++ Map(name -> v))
-      }
-    }
-    
-    def regTaken(s: State): Boolean = s.regs.contains(name)
   }
 
   case class WhereIs(name: String) extends Command {
     override type Result = String
 
-    override def preCondition(s: State): Boolean = s.pids.isDefined
+    override def preCondition(s: State): Boolean = true
 
     override def nextState(s: State, v:Term[Result]) = s
     
     override def postCondition(s: State, result: Try[Result]): Prop = {
-      result map { pid1 =>
-        val pid2 = for {
-          (_, TermResult(pid)) <- s.regs.find(_._1 == name)
-        } yield pid
-        
-        pid1 == pid2
-      } isSuccess
+      result match {
+        case Failure(_) => !s.regs.exists(_._1 == name)
+        case Success(pid) => {
+          s.regs.find { 
+            case (regName, TermResult(regPid)) => regName == name && regPid == pid 
+          } isDefined
+        }
+      }
     }
 
     override def run(sut: Sut, s: State): Result = {

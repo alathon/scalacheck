@@ -20,6 +20,7 @@ import scala.language.implicitConversions
  *  @since 1.12.0
  */
 trait Commands {
+  // TODO: Why is this not just a type alias???
   sealed case class TermId(id: Int) {
     override def toString = id.toString
   }
@@ -32,10 +33,8 @@ trait Commands {
    */
   implicit def term2OptionVal[T](xo: Term[T]): Option[T] = xo.getAsOption
   
-  object SymbolicTerm {
-    def unapply[T](t: Term[T]): Option[TermId] = Some(t.id)
-    def apply(id: TermId) = new Term(id, None)
-  }
+  
+  
   
   object TermResultTry {
     def unapply[T](t: Term[T]): Option[Try[T]] = {
@@ -54,12 +53,23 @@ trait Commands {
     def unapply[T](t: Term[T]): Option[T] = t.getAsOption
   }
 
+  object SymbolicTerm {
+    def unapply[T](t: Term[T]): Option[TermId] = {
+      if(!t.res.isDefined) Some(t.id)
+      else None
+    }
+    def apply[T](id: TermId) = new Term[T](id, None)
+  }
+  
   object DynamicTerm {
     def apply[T](id: TermId, res: Option[Try[T]]) = new Term[T](id, res)
     def unapply[T](t: Term[T]): Option[(TermId, Try[T])] = {    
-      for {
-        v <- t.res
-      } yield (t.id, v)
+      if(t.res.isDefined) {
+        for {
+          v <- t.res
+        } yield (t.id, v)
+      }
+      else None
     }
   }
 
@@ -84,9 +94,22 @@ trait Commands {
      if(res.isEmpty) throw new Exception("Term has no result to get.")
      else res.get
 
+   // TODO: This is still shaky. This is here because value is res.get.get,
+   // meaning that we are acting under the assumption that values are only here
+   // on a Success(). I worry that this makes Failure() harder to handle, though?
    private[this] def hasResult = res.isDefined && res.get.isSuccess
    
    private[this] def value = res.get.get
+   
+   def resolve(o: Any): Option[T] = o match {
+     case trav: Traversable[_] => trav.collectFirst({ 
+       case t:Term[T] if(t.id == this.id) => {
+         resolve(t)
+       }
+     }).flatten
+     case term: Term[T] if(this.id == term.id) => term.getAsOption
+     case _ => None
+   }
    
    def getOrElse[U >: T](default: => U): U =
      if(!hasResult) default else value
@@ -123,7 +146,6 @@ trait Commands {
    def flatten[U](implicit ev: T <:< Term[U]): Term[U] = value
    
    def withFilter(p: T => Boolean): WithFilter = new WithFilter(p)
-    
     class WithFilter(p: T => Boolean) {
        def map[U](f: T => U): Term[U] = self filter p map f
        def flatMap[U](f: T => Term[U]): Term[U] = self filter p flatMap(f)
@@ -378,9 +400,15 @@ trait Commands {
     * [[State]].  By default no shrinking is done for [[State]]. */
   def shrinkState: Shrink[State] = implicitly
 
+  
   // Private methods //
   type Commands = List[Command]
 
+  def shrinkCommandsTerms: Shrink[List[(Command,Term[_])]] = Shrink[List[(Command,Term[_])]] { pairs =>
+    
+    Shrink.shrink(pairs)
+  }
+  
   case class Actions(
     s: State, seqCmds: Commands, seqTerms: Seq[Term[_]], parCmds: List[Commands]
   )

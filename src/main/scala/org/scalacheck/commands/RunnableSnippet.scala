@@ -22,9 +22,9 @@ object StandaloneSnippet {
       (name,p) <- props.properties
       p2 = Prop.collect(params)(p)
       res = Test.check(params, p2)
-      Success(snip) = snippet(res, shrink)
+      snip = snippet(res, shrink) if(snip.isSuccess)
     } yield 
-      SnippetResult(name,res,snip)
+      SnippetResult(name,res,snip.get)
   }
 }
 
@@ -32,11 +32,12 @@ object ScalaStatements {
   
   def utils: String = s"""
   def cmdFormat(c: Command): String = ScalaPP.format(c) + (c.getMetadata map { m => " { Metadata: " + ScalaPP.format(m) + " }" } getOrElse "")
-  def resultFormat[T](r: Try[T]): String = r.map(ScalaPP.format(_)).getOrElse(ScalaPP.format(r))"""
+  def resultFormat[T](r: Try[T]): String = r.map(ScalaPP.format(_)).getOrElse(ScalaPP.format(r))
+  val params = org.scalacheck.Gen.Parameters.default"""
   
   def commandSnippet(cmdIdx: Int, stateIdx: Int): Seq[String] = Seq(
     s"val r${cmdIdx} = Try(c${cmdIdx}.run(sut, s${stateIdx}))",
-    s"val p${cmdIdx} = c${cmdIdx}.postCondition(s${stateIdx}, r${cmdIdx}).apply(org.scalacheck.Gen.Parameters.default).status",
+    s"val p${cmdIdx} = c${cmdIdx}.postCondition(s${stateIdx}, r${cmdIdx}).apply(params).status",
     s"val t${cmdIdx} = DynamicTerm(TermId(${cmdIdx}), Some(r${cmdIdx}))",
     s"val s${stateIdx+1} = c${cmdIdx}.nextState(s${stateIdx}, t${cmdIdx})",
     s"""println("c${cmdIdx} => " + cmdFormat(c${cmdIdx}) + " = " + resultFormat(r${cmdIdx}))""",
@@ -113,7 +114,7 @@ ${ScalaStatements.objStmt(objName, contents)}
   def snippet(r: Result, shrink: Boolean): Try[String] = {
     r.status match {
       case Failed(x::xs,_) => handleArg(x, shrink)
-      case Proved(x::xs) => handleArg(x, shrink)
+      //case Proved(x::xs) => handleArg(x, shrink)
       case x => {
         Failure(new Exception(s"Irrelevant ${x} Test status"))
       }

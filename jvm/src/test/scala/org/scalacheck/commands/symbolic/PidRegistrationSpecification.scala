@@ -28,7 +28,7 @@ object CommandsPidRegistration extends Properties("CommandsPidRegistration") {
     } yield {
       r.result.status match {
         case Failed(x::xs, labels) => {
-          log.write(labels.toString) // TODO::: This is not making any sense.. Argh...
+          log.write(labels.toString)
         }
         case _ =>
       }
@@ -37,6 +37,7 @@ object CommandsPidRegistration extends Properties("CommandsPidRegistration") {
       writer.close()
     }
   }
+  
 }
 
 object PidRegistrationSpecification extends Commands  with RunnableSnippet {
@@ -135,7 +136,7 @@ object PidRegistrationSpecification extends Commands  with RunnableSnippet {
     
     override type Result = Unit
     
-    override def preCondition(s: State): Boolean = findPid(s).isDefined
+    override def preCondition(s: State): Boolean = s.pids.exists(_.id == pid.id)
     
     override def nextState(s: State, v:Term[Result]) = {
       if(s.regs.contains(name)) {
