@@ -18,6 +18,14 @@ object Test {
   /** Test parameters used by the check methods. Default
    *  parameters are defined by [[Test.Parameters.default]]. */
   sealed abstract class Parameters {
+/*    def toString() = s"""
+Parameters:
+  Min successful tests: ${minSuccessfulTests}
+  Min size: ${minSize}
+  Max size: ${maxSize}
+  Workers: ${workers}
+  Max discard ratio: ${maxDiscardRatio}
+"""*/
     /** The minimum number of tests that must succeed for ScalaCheck to
      *  consider a property passed. */
     val minSuccessfulTests: Int
@@ -104,6 +112,8 @@ object Test {
   /** Test parameters used by the check methods. Default
    *  parameters are defined by [[Test.Parameters.default]]. */
   object Parameters {
+    
+
     /** Default test parameters. Can be overriden if you need to
      *  tweak the parameters:
      *

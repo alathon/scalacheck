@@ -1,17 +1,22 @@
 package org.scalacheck.commands.symbolic
 
-import org.scalacheck._
+import org.scalacheck.Properties
+import org.scalacheck.Prop
+import org.scalacheck.Gen
+import org.scalacheck.Gen._
+import scala.util.Try
+import org.scalacheck.commands.StandaloneSnippet
+import org.scalacheck.commands.RunnableSnippet
+import org.scalacheck.commands.Commands
+
 import org.scalacheck.Test.Failed
 import org.scalacheck.Test.Exhausted
 import org.scalacheck.Test.Passed
 import org.scalacheck.Test.Proved
-import org.scalacheck.commands._
-import org.scalacheck.Gen._
-import scala.util.Try
+
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.commands.Commands
 import scala.language.postfixOps
-import scala.util.Success
+
 import java.io.PrintWriter
 import java.io.File
 

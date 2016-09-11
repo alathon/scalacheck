@@ -142,19 +142,13 @@ object MultiPidRegistrationSpecification2 extends Commands with RunnableSnippet 
   }
 
   case class GetPid() extends Command {
-    override type Metadata = Option[Int]
+    override type Metadata = Option[String]
     
     override def genMetadata(s: State): Metadata = {
-      val a = for {
-        t <- s.listOfPids
-        pids <- t
-      } yield {
-        5
-      }
       for {
         TermResult(pids) <- s.listOfPids
         i = scala.util.Random.nextInt(pids.size)
-      } yield i
+      } yield pids(i)
     }
     
     override type Result = String
@@ -166,11 +160,7 @@ object MultiPidRegistrationSpecification2 extends Commands with RunnableSnippet 
     override def postCondition(s: State, result: Try[Result]): Prop = true
     
     override def run(sut: Sut, s: State): Result = {
-      val pid = for {
-        TermResult(pids) <- s.listOfPids
-        i <- maybeSetMetadata(s)
-      } yield pids(i)
-
+      val pid = maybeSetMetadata(s)
       pid.get
     }
   }

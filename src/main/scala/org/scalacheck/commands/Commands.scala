@@ -33,9 +33,6 @@ trait Commands {
    */
   implicit def term2OptionVal[T](xo: Term[T]): Option[T] = xo.getAsOption
   
-  
-  
-  
   object TermResultTry {
     def unapply[T](t: Term[T]): Option[Try[T]] = {
       try {
@@ -84,7 +81,7 @@ trait Commands {
    
     override def toString() = {
       val base = "Term(" + id
-      if(hasResult)
+      if(res.isDefined)
         base + ", " + res + ")"
       else
         base + ")"
@@ -97,18 +94,22 @@ trait Commands {
    // TODO: This is still shaky. This is here because value is res.get.get,
    // meaning that we are acting under the assumption that values are only here
    // on a Success(). I worry that this makes Failure() harder to handle, though?
+   // One possible solution is to have both hasResult and hasSuccess, I suppose?
    private[this] def hasResult = res.isDefined && res.get.isSuccess
    
    private[this] def value = res.get.get
    
-   def resolve(o: Any): Option[T] = o match {
+   def findIn(o: Any = this): Option[Term[T]] = o match {
      case trav: Traversable[_] => trav.collectFirst({ 
-       case t:Term[T] if(t.id == this.id) => {
-         resolve(t)
-       }
-     }).flatten
-     case term: Term[T] if(this.id == term.id) => term.getAsOption
+       case t:Term[T] if(t.id == this.id) => Some(t)
+       }).flatten
+     case term: Term[T] if(this.id == term.id) => Some(term)
      case _ => None
+   }
+
+   def resolve(o: Any = this): Option[T] = findIn(o) match {
+     case Some(t) => t.getAsOption
+     case None => None
    }
    
    def getOrElse[U >: T](default: => U): U =
@@ -247,6 +248,7 @@ trait Commands {
     
     def genMetadata(s: State): Metadata = throw new Exception("genMetadata() must be overwritten if you use Metadata!")
     
+    // TODO: This name is kind of iffy. Maybe setOnceMetadata, or setMetadata? Or maybe just metadata() ?
     def maybeSetMetadata(s: State): Metadata = {
       metadata match {
         case None => {
@@ -301,6 +303,34 @@ trait Commands {
     }
   }
 
+  /** A command that selects an item from a list.
+   *  If you have a Command that returns an Option[Term[Seq[T]]],
+   *  and you would like to be able to interact with T's in a more
+   *  natural manner, e.g. in a Seq[Term[T]], then a SelectorCommand
+   *  can help do that, by pulling an entry out from the Option[Term[Seq[T]]]
+   *  and into a Seq[Term[T]].
+	**/
+  trait SelectorCommand[T] extends Command {
+    def collectionTerm(s: State): Option[Term[Seq[T]]]
+    
+    override type Metadata = Option[T]
+    override type Result = T
+    override def preCondition(s: State): Boolean = collectionTerm(s).isDefined
+    override def genMetadata(s: State): Metadata = {
+      for {
+        TermResult(col) <- collectionTerm(s)
+        i = scala.util.Random.nextInt(col.size)
+      } yield col(i)
+    }
+    def postCondition(state: State, result: Try[Result]): Prop = {
+      true
+    }
+    override def run(sut: Sut, s: State): Result = {
+      val pid = maybeSetMetadata(s)
+      pid.get
+    }
+  }
+  
   /** A command that never should throw an exception on execution. */
   trait SuccessCommand extends Command {
     def postCondition(state: State, result: Result): Prop

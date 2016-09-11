@@ -52,6 +52,7 @@ class Properties(val name: String) {
    *  instead. */
   def check(prms: Test.Parameters = Test.Parameters.default): Unit = {
     val params = overrideParameters(prms)
+    println("Check being called")
     Test.checkProperties(
       params.withTestCallback(ConsoleReporter(1) chain params.testCallback), this
     )
@@ -63,7 +64,11 @@ class Properties(val name: String) {
   def main(args: Array[String]): Unit = {
     val ret = Test.cmdLineParser.parseParams(args) match {
       case (params, Nil) =>
-        val res = Test.checkProperties(params, this)
+        var p = params
+        //println(s"Before: ${p.minSuccessfulTests}") 
+        if (args.isEmpty) p = overrideParameters(params)
+        //println(s"After: ${p.minSuccessfulTests}")
+        val res = Test.checkProperties(p, this)
         val failed = res.filter(!_._2.passed).size
         failed
       case (_, os) =>
