@@ -12,19 +12,46 @@ import org.scalacheck.Test
 import scala.collection.mutable.MutableList
 import com.todesking.scalapp.syntax._
 import com.todesking.scalapp.ScalaPP
+import org.scalacheck.util.ConsoleReporter
+import java.io.File
+import java.io.PrintWriter
+import org.scalacheck.Test.Failed
 
 object StandaloneSnippet {
   case class SnippetResult(name: String, result: Result, snippetText: String)
   
-  def run(prms: Parameters = Parameters.default, props: Properties, snippet: (Result,Boolean) => Try[String], shrink: Boolean): Seq[SnippetResult] = {
-    val params = props.overrideParameters(prms)
-    for { 
-      (name,p) <- props.properties
-      p2 = Prop.collect(params)(p)
-      res = Test.check(params, p2)
-      snip = snippet(res, shrink) if(snip.isSuccess)
-    } yield 
-      SnippetResult(name,res,snip.get)
+  def dumpLog(r: SnippetResult, filename: String, console: Boolean = false) = {
+    val writer = new PrintWriter(new File(filename))
+    
+    r.result.status match {
+      case Failed(x::xs, labels) => {
+        if(console) println(labels.toString)
+        writer.write(labels.toString)
+      }
+      case _ =>
+        if(console) println("Status: " + r.result.status.toString)
+    }
+    writer.close()
+  }
+  
+  def dumpRunnable(s: SnippetResult, filename: String, console: Boolean = false) = {
+    val writer = new PrintWriter(new File(filename))
+    writer.write(s.snippetText)
+    writer.close()
+    if(console) println(s.snippetText)
+  }
+
+  def run(prms: Parameters = Parameters.default, props: Properties, snippet: (Result,Boolean) => Try[String], shrink: Boolean): Option[SnippetResult] = {
+    val params = props.overrideParameters(prms).withTestCallback(ConsoleReporter(1))
+    
+    props.properties
+      .collectFirst({ case p => p })
+      .flatMap { case (name, prop) =>
+        val p2 = Prop.collect(params)(prop)
+        val res = Test.check(params, p2)
+        val snip = snippet(res, shrink)
+        snip.map(s => SnippetResult(name, res, s)).toOption
+      }
   }
 }
 

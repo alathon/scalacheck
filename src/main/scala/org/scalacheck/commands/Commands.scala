@@ -76,7 +76,7 @@ trait Commands {
   }
   
   sealed class Term[+T](val id: TermId, val res: Option[Try[T]]) { self =>
-    override def equals(o: Any) = o.isInstanceOf[Term[T]] && 
+    override def equals(o: Any) = o.isInstanceOf[Term[T]] &&
       o.asInstanceOf[Term[T]].id == this.id
    
     override def toString() = {
@@ -91,17 +91,15 @@ trait Commands {
      if(res.isEmpty) throw new Exception("Term has no result to get.")
      else res.get
 
-   // TODO: This is still shaky. This is here because value is res.get.get,
-   // meaning that we are acting under the assumption that values are only here
-   // on a Success(). I worry that this makes Failure() harder to handle, though?
-   // One possible solution is to have both hasResult and hasSuccess, I suppose?
-   private[this] def hasResult = res.isDefined && res.get.isSuccess
+   def hasResult = res.isDefined && res.get.isSuccess
    
    private[this] def value = res.get.get
    
    def findIn(o: Any = this): Option[Term[T]] = o match {
      case trav: Traversable[_] => trav.collectFirst({ 
        case t:Term[T] if(t.id == this.id) => Some(t)
+       case (t:Term[T],_) if(t.id == this.id) => Some(t)
+       case (_,t:Term[T]) if(t.id == this.id) => Some(t)
        }).flatten
      case term: Term[T] if(this.id == term.id) => Some(term)
      case _ => None
@@ -115,7 +113,7 @@ trait Commands {
    def getOrElse[U >: T](default: => U): U =
      if(!hasResult) default else value
      
-   private[Commands] def getAsOption: Option[T] = if(hasResult) Some(value) else None
+   def getAsOption: Option[T] = if(hasResult) Some(value) else None
    
    def orElse[U >: T](default: => Term[U]): Term[U] =
      if(!hasResult) default else this
@@ -310,24 +308,38 @@ trait Commands {
    *  can help do that, by pulling an entry out from the Option[Term[Seq[T]]]
    *  and into a Seq[Term[T]].
 	**/
+  
   trait SelectorCommand[T] extends Command {
     def collectionTerm(s: State): Option[Term[Seq[T]]]
     
-    override type Metadata = Option[T]
+    override type Metadata = Option[Int]
+
     override type Result = T
+    
     override def preCondition(s: State): Boolean = collectionTerm(s).isDefined
+    
     override def genMetadata(s: State): Metadata = {
       for {
         TermResult(col) <- collectionTerm(s)
+        if(col.size > 0)
         i = scala.util.Random.nextInt(col.size)
-      } yield col(i)
+      } yield i
     }
+
     def postCondition(state: State, result: Try[Result]): Prop = {
-      true
+      result match {
+        case Failure(_) => maybeSetMetadata(state).isEmpty
+        case Success(_) => maybeSetMetadata(state).isDefined
+      }
     }
+
     override def run(sut: Sut, s: State): Result = {
-      val pid = maybeSetMetadata(s)
-      pid.get
+      val item = for {
+        idx <- maybeSetMetadata(s)
+        TermResult(seq) <- collectionTerm(s)
+      } yield seq(idx)
+      
+      item getOrElse(throw new Exception("Selector failed"))
     }
   }
   

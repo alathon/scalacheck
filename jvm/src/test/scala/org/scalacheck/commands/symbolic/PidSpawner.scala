@@ -17,7 +17,7 @@ class PidSpawner() {
 
   def register(uuid: String, name: String): Unit = {
     if(state.pids.exists(x => x == uuid) && !state.regs.exists(x => x._1 == name)) {
-      //state = state.copy(regs = state.regs ++ Map(name -> uuid))
+      state = state.copy(regs = state.regs ++ Map(name -> uuid))
     } else {
       throw new Exception(s"Unable to register ${name} -> ${uuid}.")
     }

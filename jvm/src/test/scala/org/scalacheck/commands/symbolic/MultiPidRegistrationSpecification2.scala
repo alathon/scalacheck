@@ -120,7 +120,7 @@ object MultiPidRegistrationSpecification2 extends Commands with RunnableSnippet 
   case class Register(pid: Term[String], name: String) extends Command {
     override type Result = String
     
-    override def preCondition(state: State) = state.pids.exists(_.id == pid.id)
+    override def preCondition(state: State) = pid.findIn(state.pids).isDefined
     
     override def run(sut: Sut, s: State): Result = {
       pid.resolve(s.pids) map { p =>

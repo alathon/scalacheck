@@ -15,7 +15,7 @@ object CommandsPidRegistration extends Properties("CommandsPidRegistration") {
   import org.scalacheck.Test._
   
   property("pidregspec") = PidRegistrationSpecification.property()
-  
+  /*
   override def main(args: Array[String]): Unit = {
     val res = StandaloneSnippet.run(props = this, 
         snippet = PidRegistrationSpecification.snippet, 
@@ -37,7 +37,7 @@ object CommandsPidRegistration extends Properties("CommandsPidRegistration") {
       writer.close()
     }
   }
-  
+  */
 }
 
 object PidRegistrationSpecification extends Commands  with RunnableSnippet {
@@ -80,7 +80,7 @@ object PidRegistrationSpecification extends Commands  with RunnableSnippet {
     )
   }
 
-  def genSpawn: Gen[Spawn] = Spawn()
+  def genSpawn = Spawn()
 
   def genRegister(state: State): Gen[Command] = {
     if(state.pids.isEmpty) genSpawn else for {
@@ -132,17 +132,14 @@ object PidRegistrationSpecification extends Commands  with RunnableSnippet {
   }
 
   case class Register(pid: Term[String], name: String) extends Command {
-    def findPid(s: State) = s.pids.find(_ == pid)
-    
     override type Result = Unit
-    
-    override def preCondition(s: State): Boolean = s.pids.exists(_.id == pid.id)
+    override def preCondition(s: State) = pid.findIn(s.pids).isDefined
     
     override def nextState(s: State, v:Term[Result]) = {
       if(s.regs.contains(name)) {
         s
       } else {
-        findPid(s) map(t => s.copy(regs = s.regs ++ Map(name -> t))) getOrElse s
+        pid.findIn(s.pids) map(t => s.copy(regs = s.regs ++ Map(name -> t))) getOrElse s
       }
     }
 
@@ -153,9 +150,9 @@ object PidRegistrationSpecification extends Commands  with RunnableSnippet {
     
     override def run(sut: Sut, s: State): Result = {
       for {
-        term <- findPid(s)
-        pidName <- term
-      } yield sut.register(pidName, name)
+        term <- pid.findIn(s.pids)
+        pidId <- term
+      } yield sut.register(pidId, name)
     }
   }
   
@@ -171,8 +168,8 @@ object PidRegistrationSpecification extends Commands  with RunnableSnippet {
         case Success(sutRes) => {
           val modelRes = for {
             term <- s.regs.get(name)
-            reg <- term
-          } yield reg
+            res <- term
+          } yield res
           
           modelRes == sutRes
         }
